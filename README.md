@@ -15,7 +15,9 @@ Local, offline, zero dependencies, no API key.</p>
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-101828">
   <img alt="zero dependencies" src="https://img.shields.io/badge/dependencies-0-08775c">
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-174ea6">
-  <img alt="78 tests" src="https://img.shields.io/badge/tests-105-6b21a8">
+  <img alt="Linux macOS Windows" src="https://img.shields.io/badge/tested_on-Linux%20%7C%20macOS%20%7C%20Windows-0f766e">
+  <img alt="ruff" src="https://img.shields.io/badge/lint-ruff-d97706">
+  <img alt="78 tests" src="https://img.shields.io/badge/tests-114-6b21a8">
 </p>
 
 ---
@@ -169,6 +171,30 @@ burnrate --format json       # everything, for your own tooling
 `--verbose` adds what you were actually paying for — the files touched and the
 commands run — which is often more interesting than the money.
 
+## Performance
+
+Measured on 2,448 real transcripts (412 sessions, ~1.1M lines):
+
+| | time |
+|---|---|
+| `burnrate` (most recent session) | **0.17s** |
+| `burnrate --summary day` (entire history) | **10.4s** |
+
+The whole-history scan started at 36.6s. Two things dominated the profile, and
+both are worth knowing about because they are easy to get wrong:
+
+- **Redaction ran 441,000 regex substitutions**, nearly all on commands like
+  `npm test` that contain nothing secret-shaped. A single cheap pre-check now
+  skips the full pass, and a test re-runs every positive case with the
+  pre-check disabled to prove it cannot mask a real secret by accident.
+- **`json.loads` ran on every line**, including queue operations and titles
+  that can never carry usage. A substring test on the raw line is roughly two
+  orders of magnitude cheaper, and it is conservative: anything that does not
+  clearly announce an uninteresting type still gets parsed, so a format change
+  costs speed rather than correctness.
+
+Output was verified byte-identical across all 412 sessions before and after.
+
 ## Prices
 
 The table is dated, and the date prints on every report, because a cost figure
@@ -219,7 +245,7 @@ and UUIDs. Treat a report as sensitive before sharing it.
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .   # 105 tests
+python -m unittest discover -s tests -t .   # 114 tests
 ```
 
 Pricing tests check against hand-computed rates rather than snapshots — a
