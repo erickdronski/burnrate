@@ -200,6 +200,17 @@ likely error in the whole project. Parser tests build real transcripts on disk,
 including truncated final lines, because live logs are appended to while you
 read them.
 
+## Related
+
+Part of a set of small, standalone tools for working with coding agents:
+
+| Tool | Job |
+|---|---|
+| [agentsmith](https://github.com/erickdronski/agentsmith) | Derives your AGENTS.md from the repo and detects drift |
+| [contexttest](https://github.com/erickdronski/contexttest) | A/B tests whether an AGENTS.md change actually helps |
+| [tripwire](https://github.com/erickdronski/tripwire) | Audits what your agent is allowed to do |
+| [gtm-skills](https://github.com/erickdronski/gtm-skills) | Go-to-market skills for agents, on a tested arithmetic engine |
+
 ## License
 
 MIT.
