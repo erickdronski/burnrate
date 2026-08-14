@@ -1,8 +1,21 @@
-# Publish to PyPI on a version tag.
+# Cut a release from a version tag.
 #
-# One-time setup: add a PyPI Trusted Publisher for this repo
-# (https://pypi.org/manage/account/publishing/) — no API token to store.
-# Then: git tag v0.1.0 && git push --tags
+#   git tag v0.1.0 && git push --tags
+#
+# The build job always runs: it re-runs the test suite, builds the sdist and
+# wheel, and checks them with twine. That is the part that must never be
+# skipped, because it is what makes a tag trustworthy.
+#
+# The publish job is deliberately conditional. Publishing needs a PyPI Trusted
+# Publisher configured for this repo (https://pypi.org/manage/account/publishing/),
+# which is a one-time browser step. Until that exists, a tag should still
+# produce a green build and a GitHub Release rather than a red X for a step
+# that was never going to work — a permanently failing workflow teaches people
+# to ignore the badge.
+#
+# To turn publishing on: configure the Trusted Publisher, then create a
+# repository variable PUBLISH_TO_PYPI=true (Settings → Secrets and variables →
+# Actions → Variables). Nothing else changes.
 name: Release
 
 on:
@@ -21,7 +34,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run the tests before publishing anything
+      - name: Run the tests before building anything
         run: python -m unittest discover -s tests -t .
       - run: pip install build twine
       - run: python -m build
@@ -34,6 +47,7 @@ jobs:
 
   publish:
     needs: build
+    if: vars.PUBLISH_TO_PYPI == 'true' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
