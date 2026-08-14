@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Confirm there are no dependencies
+        run: test ! -f requirements.txt || (echo "burnrate must stay dependency-free" && exit 1)
+      - name: Run the test suite
+        run: python -m unittest discover -s tests -t . -v
+
+  install:
+    name: installs and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - run: burnrate --version
+      - name: Reports cleanly when there are no sessions
+        run: |
+          mkdir -p /tmp/empty
+          burnrate --root /tmp/empty && exit 1 || test $? -eq 1
+      - name: Guard fails open with no transcript
+        run: burnrate guard --cap 1.00 --transcript /tmp/nope.jsonl < /dev/null
