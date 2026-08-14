@@ -55,7 +55,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      # Pinned deliberately. An unpinned linter means CI enforces whatever
+      # rules shipped this morning, so a build breaks on a commit that changed
+      # nothing — and the person who has to fix it did not choose to upgrade.
+      - run: pip install ruff==0.16.3
       - name: Lint
         run: ruff check --output-format=github .
       - name: Formatting is consistent

@@ -244,7 +244,9 @@ def render_top(reports, limit: int = 10, width: int = 64) -> str:
     total = sum(r["cost"] for r in reports)
 
     lines = [rule, "  MOST EXPENSIVE SESSIONS", rule, ""]
-    lines.append("  %-10s %-14s %8s %9s %8s" % ("DATE", "PROJECT", "TURNS", "TOKENS", "COST"))
+    lines.append(
+        "  %-10s %-14s %8s %9s %8s" % ("DATE", "PROJECT", "TURNS", "TOKENS", "COST")
+    )
     for report in ranked:
         share = (report["cost"] / total * 100) if total else 0
         lines.append(
@@ -288,7 +290,11 @@ def render_trend(reports, width: int = 64) -> str:
         # correct — a multi-day session's cost did not happen on one day — so
         # the count of spanning sessions is reported rather than hidden.
         day = report.get("end_date") or report["date"] or "(undated)"
-        if report.get("end_date") and report.get("date") and report["end_date"] != report["date"]:
+        if (
+            report.get("end_date")
+            and report.get("date")
+            and report["end_date"] != report["date"]
+        ):
             spanning += 1
         entry = by_day.setdefault(day, {"cost": 0.0, "sessions": 0, "tokens": 0})
         entry["cost"] += report["cost"]
@@ -305,7 +311,12 @@ def render_trend(reports, width: int = 64) -> str:
         entry = by_day[day]
         lines.append(
             "  %-10s %9s %-22s %d session(s)"
-            % (day, fmt_money(entry["cost"]), bar(entry["cost"] / peak, 20), entry["sessions"])
+            % (
+                day,
+                fmt_money(entry["cost"]),
+                bar(entry["cost"] / peak, 20),
+                entry["sessions"],
+            )
         )
 
     lines.append("")
@@ -339,7 +350,7 @@ def render_trend(reports, width: int = 64) -> str:
 
 def bar(fraction: float, width: int = 20) -> str:
     fraction = max(0.0, min(1.0, float(fraction)))
-    filled = int(round(fraction * width))
+    filled = round(fraction * width)
     return "█" * filled + "░" * (width - filled)
 
 

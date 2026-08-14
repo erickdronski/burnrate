@@ -29,9 +29,9 @@ class TestTop(unittest.TestCase):
     def test_ranks_by_cost_descending(self):
         reports = [report(1_000_000), report(4_000_000), report(2_000_000)]
         text = render_top(reports)
-        first = text.index("$100.00")   # 4M output on Opus 5
-        second = text.index("$50.00")   # 2M
-        third = text.index("$25.00")    # 1M
+        first = text.index("$100.00")  # 4M output on Opus 5
+        second = text.index("$50.00")  # 2M
+        third = text.index("$25.00")  # 1M
         self.assertLess(first, second)
         self.assertLess(second, third)
 
@@ -106,7 +106,7 @@ class TestAnalysisCLI(unittest.TestCase):
     def test_top_accepts_a_limit(self):
         records = [assistant("m", output_tokens=1_000_000)]
         with TranscriptFixture(records) as fixture:
-            code, out, _ = run_cli("--root", fixture.root, "--top", "3")
+            code, _out, _ = run_cli("--root", fixture.root, "--top", "3")
         self.assertEqual(code, 0)
 
     def test_trend_runs(self):

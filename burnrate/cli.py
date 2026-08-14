@@ -203,9 +203,19 @@ def _select_sessions(args, since: Optional[str]):
             raise SessionError("no billable usage found in %s" % args.session)
         return [session]
 
-    limit = None if (args.all or args.summary or args.top or args.trend or since) else args.last
+    limit = (
+        None
+        if (args.all or args.summary or args.top or args.trend or since)
+        else args.last
+    )
     sessions = discover(root=args.root, project=args.project, since=since, limit=limit)
-    if not args.all and not args.summary and not args.top and not args.trend and not since:
+    if (
+        not args.all
+        and not args.summary
+        and not args.top
+        and not args.trend
+        and not since
+    ):
         return sessions[: args.last]
     return sessions
 
