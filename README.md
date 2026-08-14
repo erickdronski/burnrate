@@ -31,9 +31,14 @@ offline — the data is already on your machine.
 ## Try it
 
 ```bash
-pip install burnrate
+pip install git+https://github.com/erickdronski/burnrate
 burnrate
 ```
+
+Installing from git is the supported path today — this is not on PyPI yet, and
+the obvious name there belongs to an unrelated project, so `pip install burnrate`
+would get you someone else's package. When it is published the distribution
+name will be `agent-burnrate`.
 
 ```
 ────────────────────────────────────────────────────────────────

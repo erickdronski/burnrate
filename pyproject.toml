@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "burnrate"
+name = "agent-burnrate"
 version = "0.1.0"
 description = "What your coding agent actually cost, and a cap to stop it before it costs more. Local, offline, zero dependencies."
 readme = "README.md"
