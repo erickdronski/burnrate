@@ -48,14 +48,14 @@ from .pricing import price_usage
 from .receipt import fmt_money
 from .sessions import Session, discover, parse_file
 
-__all__ = ["evaluate", "run_guard", "GuardResult"]
+__all__ = ["GuardResult", "evaluate", "run_guard"]
 
 #: Fraction of the cap at which to warn rather than block.
 DEFAULT_WARN_AT = 0.75
 
 
 class GuardResult:
-    __slots__ = ("state", "cost", "cap", "message", "session_id")
+    __slots__ = ("cap", "cost", "message", "session_id", "state")
 
     def __init__(
         self,
@@ -134,16 +134,17 @@ def evaluate(
 
     try:
         session = parse_file(path)
-    except Exception as exc:  # noqa: BLE001 - fail open, always
+    except Exception as exc:
         return GuardResult(
-            "unknown", None, cap, "burnrate: could not read transcript (%s); "
-            "not enforcing" % type(exc).__name__
+            "unknown",
+            None,
+            cap,
+            "burnrate: could not read transcript (%s); "
+            "not enforcing" % type(exc).__name__,
         )
 
     if session is None:
-        return GuardResult(
-            "ok", 0.0, cap, "burnrate: no billable usage yet"
-        )
+        return GuardResult("ok", 0.0, cap, "burnrate: no billable usage yet")
 
     cost = session_cost(session, prices)
     if cost is None:
@@ -151,8 +152,7 @@ def evaluate(
             "unknown",
             None,
             cap,
-            "burnrate: no price on file for the models in this session; "
-            "not enforcing",
+            "burnrate: no price on file for the models in this session; not enforcing",
             session.session_id,
         )
 
@@ -165,8 +165,7 @@ def evaluate(
                 "burnrate: this session has reached %s against a %s cap.\n"
                 "Stopping here. Raise the cap with --cap, or start a fresh "
                 "session — context resets are usually cheaper than continuing "
-                "a long one anyway."
-                % (fmt_money(cost), fmt_money(cap))
+                "a long one anyway." % (fmt_money(cost), fmt_money(cap))
             ),
             session.session_id,
         )
@@ -212,7 +211,7 @@ def _transcript_from_environment() -> Optional[str]:
 
     try:
         sessions = discover(limit=1)
-    except Exception:  # noqa: BLE001 - fail open
+    except Exception:
         return None
     return sessions[0].path if sessions else None
 
@@ -248,11 +247,7 @@ def run_guard(
         sys.stdout.write(json.dumps(result.to_dict()) + "\n")
         return result.exit_code
 
-    if result.state == "block":
-        sys.stderr.write(result.message + "\n")
-    elif result.state == "warn":
-        sys.stderr.write(result.message + "\n")
-    elif not quiet:
+    if result.state == "block" or result.state == "warn" or not quiet:
         sys.stderr.write(result.message + "\n")
 
     return result.exit_code

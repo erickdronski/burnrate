@@ -24,19 +24,18 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .pricing import NON_BILLABLE_MODELS, Usage
 from .redact import redact
 
 __all__ = [
     "Session",
+    "SessionError",
     "Turn",
     "default_root",
     "discover",
     "parse_file",
-    "SessionError",
 ]
 
 
@@ -45,9 +44,7 @@ class SessionError(RuntimeError):
 
 
 #: Where Claude Code keeps transcripts. Overridable for other harnesses.
-DEFAULT_ROOTS = (
-    "~/.claude/projects",
-)
+DEFAULT_ROOTS = ("~/.claude/projects",)
 
 
 def default_root() -> Optional[str]:
@@ -61,7 +58,7 @@ def default_root() -> Optional[str]:
 class Turn:
     """One billable model response."""
 
-    __slots__ = ("message_id", "model", "usage", "timestamp", "tools", "fast")
+    __slots__ = ("fast", "message_id", "model", "timestamp", "tools", "usage")
 
     def __init__(
         self,
@@ -122,14 +119,10 @@ class Session:
         return sum(self.tool_counts.values())
 
     def top_tools(self, limit: int = 8) -> List[Tuple[str, int]]:
-        return sorted(
-            self.tool_counts.items(), key=lambda item: -item[1]
-        )[:limit]
+        return sorted(self.tool_counts.items(), key=lambda item: -item[1])[:limit]
 
     def top_files(self, limit: int = 8) -> List[Tuple[str, int]]:
-        return sorted(
-            self.files_touched.items(), key=lambda item: -item[1]
-        )[:limit]
+        return sorted(self.files_touched.items(), key=lambda item: -item[1])[:limit]
 
     @property
     def date(self) -> Optional[str]:
@@ -140,6 +133,20 @@ class Session:
 
 #: Tool names whose input carries a file path worth recording.
 _FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit", "MultiEdit"})
+
+#: Record types this parser reads. Transcripts also carry queue operations,
+#: attachments, titles, and mode changes, none of which affect a receipt.
+#:
+#: Deserializing every line dominated the runtime of a whole-history report —
+#: 205k `json.loads` calls, most of them on records that are discarded a
+#: microsecond later. A substring test on the raw line is roughly two orders of
+#: magnitude cheaper than parsing, and the transcripts are written as compact
+#: JSON, so the type token appears verbatim.
+#:
+#: The check is deliberately conservative: anything that does not clearly
+#: announce an uninteresting type still gets parsed, so a format change
+#: degrades speed rather than correctness.
+_WANTED_TYPES = ('"type":"assistant"', '"type":"user"', '"type":"system"')
 
 
 def parse_file(path: str) -> Optional[Session]:
@@ -159,7 +166,10 @@ def parse_file(path: str) -> Optional[Session]:
     unkeyed: List[Turn] = []
 
     try:
-        handle = open(path, "r", encoding="utf-8", errors="replace")
+        # Opened outside a `with` so an unreadable transcript is skipped rather
+        # than aborting the whole report; the handle is closed by the `with`
+        # immediately below.
+        handle = open(path, encoding="utf-8", errors="replace")  # noqa: SIM115
     except OSError:
         return None
 
@@ -167,6 +177,10 @@ def parse_file(path: str) -> Optional[Session]:
         for line in handle:
             line = line.strip()
             if not line:
+                continue
+            # Cheap pre-filter: skip records this parser has no use for without
+            # paying to deserialize them. See _WANTED_TYPES.
+            if '"type":"' in line and not any(t in line for t in _WANTED_TYPES):
                 continue
             try:
                 record = json.loads(line)
@@ -266,9 +280,7 @@ def _absorb_tool_uses(session: Session, message: dict) -> None:
         elif name in _FILE_TOOLS:
             target = payload.get("file_path") or payload.get("notebook_path")
             if isinstance(target, str) and target:
-                session.files_touched[target] = (
-                    session.files_touched.get(target, 0) + 1
-                )
+                session.files_touched[target] = session.files_touched.get(target, 0) + 1
 
 
 def _absorb_tool_result(session: Session, record: dict) -> None:

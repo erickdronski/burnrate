@@ -53,9 +53,7 @@ class TestResolveModel(unittest.TestCase):
         self.assertEqual(resolve_model("claude-opus-5"), "claude-opus-5")
 
     def test_dated_snapshot_resolves_to_base(self):
-        self.assertEqual(
-            resolve_model("claude-haiku-4-5-20251001"), "claude-haiku-4-5"
-        )
+        self.assertEqual(resolve_model("claude-haiku-4-5-20251001"), "claude-haiku-4-5")
 
     def test_longest_prefix_wins(self):
         # "claude-opus-4-8" must not resolve via a shorter "claude-opus-4" key.
@@ -108,7 +106,9 @@ class TestPriceUsage(unittest.TestCase):
         TTL it did not pick. On long sessions 1-hour writes dominate, so
         blending them understates the bill.
         """
-        five_minute = price_usage(Usage(cache_write_5m_tokens=1_000_000), "claude-opus-5")
+        five_minute = price_usage(
+            Usage(cache_write_5m_tokens=1_000_000), "claude-opus-5"
+        )
         one_hour = price_usage(Usage(cache_write_1h_tokens=1_000_000), "claude-opus-5")
         self.assertLess(five_minute, one_hour)
         self.assertAlmostEqual(one_hour / five_minute, 1.6, places=6)
@@ -144,7 +144,9 @@ class TestPriceUsage(unittest.TestCase):
     def test_override_can_add_an_unknown_model(self):
         usage = Usage(output_tokens=1_000_000)
         result = price_usage(
-            usage, "my-local-model", prices={"my-local-model": {"input": 0, "output": 1}}
+            usage,
+            "my-local-model",
+            prices={"my-local-model": {"input": 0, "output": 1}},
         )
         self.assertAlmostEqual(result, 1.0, places=6)
 
@@ -178,7 +180,8 @@ class TestUncachedEquivalent(unittest.TestCase):
 
 class TestPriceOverrides(unittest.TestCase):
     def write(self, payload):
-        handle = tempfile.NamedTemporaryFile(
+        # delete=False is required: the file is read back by path.
+        handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
             "w", suffix=".json", delete=False, encoding="utf-8"
         )
         json.dump(payload, handle)
@@ -188,11 +191,15 @@ class TestPriceOverrides(unittest.TestCase):
 
     def test_wrapped_form(self):
         path = self.write({"prices": {"m": {"input": 1, "output": 2}}})
-        self.assertEqual(load_price_overrides(path), {"m": {"input": 1.0, "output": 2.0}})
+        self.assertEqual(
+            load_price_overrides(path), {"m": {"input": 1.0, "output": 2.0}}
+        )
 
     def test_bare_form(self):
         path = self.write({"m": {"input": 1, "output": 2}})
-        self.assertEqual(load_price_overrides(path), {"m": {"input": 1.0, "output": 2.0}})
+        self.assertEqual(
+            load_price_overrides(path), {"m": {"input": 1.0, "output": 2.0}}
+        )
 
     def test_missing_file(self):
         with self.assertRaises(PricingError):

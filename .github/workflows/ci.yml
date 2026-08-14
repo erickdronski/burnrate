@@ -8,12 +8,18 @@ on:
 
 jobs:
   test:
-    name: tests (python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: tests (${{ matrix.os }} · python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          # Path handling is where a Unix-only assumption hides, so the
+          # oldest and newest supported Pythons also run on macOS and Windows.
+          - { os: macos-latest, python-version: "3.12" }
+          - { os: windows-latest, python-version: "3.12" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,3 +46,17 @@ jobs:
           burnrate --root /tmp/empty && exit 1 || test $? -eq 1
       - name: Guard fails open with no transcript
         run: burnrate guard --cap 1.00 --transcript /tmp/nope.jsonl < /dev/null
+
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Lint
+        run: ruff check --output-format=github .
+      - name: Formatting is consistent
+        run: ruff format --check --diff .

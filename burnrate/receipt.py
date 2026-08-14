@@ -27,7 +27,7 @@ from .pricing import (
 )
 from .sessions import Session
 
-__all__ = ["price_session", "render_session", "render_summary", "fmt_money"]
+__all__ = ["fmt_money", "price_session", "render_session", "render_summary"]
 
 
 def fmt_money(amount: Optional[float]) -> str:
@@ -68,9 +68,7 @@ def price_session(
     for model, usage in sorted(
         session.usage_by_model().items(), key=lambda item: -item[1].total_tokens
     ):
-        cost = price_usage(
-            usage, model, prices, fast_mode=model in fast_models
-        )
+        cost = price_usage(usage, model, prices, fast_mode=model in fast_models)
         counterfactual = uncached_equivalent(usage, model, prices)
         if cost is None:
             unpriced.append(model)
@@ -107,7 +105,7 @@ def price_session(
         "duplicate_records": session.duplicate_records,
         "usage": total_usage,
         "by_model": by_model,
-        "cost": total_cost if not unpriced or total_cost else total_cost,
+        "cost": total_cost,
         "uncached_cost": uncached_total,
         "saved_by_caching": max(0.0, uncached_total - total_cost),
         "cache_hit_rate": cache_hit_rate,
@@ -156,14 +154,18 @@ def render_session(
 
     lines.append("")
     lines.append("  %-28s %12s" % ("input (uncached)", fmt_tokens(usage.input_tokens)))
-    lines.append("  %-28s %12s" % ("input (cache read)", fmt_tokens(usage.cache_read_tokens)))
+    lines.append(
+        "  %-28s %12s" % ("input (cache read)", fmt_tokens(usage.cache_read_tokens))
+    )
     if usage.cache_write_5m_tokens:
         lines.append(
-            "  %-28s %12s" % ("cache write (5m)", fmt_tokens(usage.cache_write_5m_tokens))
+            "  %-28s %12s"
+            % ("cache write (5m)", fmt_tokens(usage.cache_write_5m_tokens))
         )
     if usage.cache_write_1h_tokens:
         lines.append(
-            "  %-28s %12s" % ("cache write (1h)", fmt_tokens(usage.cache_write_1h_tokens))
+            "  %-28s %12s"
+            % ("cache write (1h)", fmt_tokens(usage.cache_write_1h_tokens))
         )
     lines.append("  %-28s %12s" % ("output", fmt_tokens(usage.output_tokens)))
 
@@ -316,4 +318,4 @@ def _shorten(text: str, width: int) -> str:
     text = text.strip()
     if len(text) <= width:
         return text
-    return "..." + text[-(width - 3):]
+    return "..." + text[-(width - 3) :]

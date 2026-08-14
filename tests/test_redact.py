@@ -13,6 +13,7 @@ Two halves, and both matter equally:
 """
 
 import json
+import re
 import unittest
 
 from burnrate.redact import redact, redact_all
@@ -74,11 +75,15 @@ class TestMasksRealSecrets(unittest.TestCase):
 
     def test_jwt(self):
         secret = fake("eyJ", "N0TAREALJWT." + "N0TAREALJWT." + "N0TAREALSIG0")
-        self.assertMasked('curl -H "Authorization: Bearer %s" https://x' % secret, secret)
+        self.assertMasked(
+            'curl -H "Authorization: Bearer %s" https://x' % secret, secret
+        )
 
     def test_authorization_header(self):
         secret = fake("N0T", "AREALTOKEN0000000000")
-        self.assertMasked('curl -H "Authorization: Token %s" https://x' % secret, secret)
+        self.assertMasked(
+            'curl -H "Authorization: Token %s" https://x' % secret, secret
+        )
 
     def test_password_assignment(self):
         secret = fake("N0T", "AREALPASSWORD")
@@ -94,7 +99,10 @@ class TestMasksRealSecrets(unittest.TestCase):
 
     def test_private_key_block(self):
         secret = fake("MII", "N0TAREALPRIVATEKEY")
-        text = "-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----" % secret
+        text = (
+            "-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----"
+            % secret
+        )
         self.assertMasked(text, secret)
 
     def test_a_prefix_survives_so_keys_stay_distinguishable(self):
@@ -129,7 +137,7 @@ class TestLeavesOrdinaryCommandsAlone(unittest.TestCase):
     def test_environment_reference_is_preserved(self):
         """Seeing that a command reads ${API_KEY} is the useful case."""
         self.assertIntact("export API_KEY=${ANTHROPIC_API_KEY}")
-        self.assertIntact("curl -H \"Authorization: Bearer $TOKEN\" https://x")
+        self.assertIntact('curl -H "Authorization: Bearer $TOKEN" https://x')
 
     def test_word_password_in_a_test_filter(self):
         self.assertIntact("python3 -m pytest tests/test_auth.py -k password")
@@ -172,9 +180,10 @@ class TestRedactionHappensAtCapture(unittest.TestCase):
         self.assertNotIn(secret, " ".join(session.commands))
 
     def test_secret_absent_from_json_output(self):
-        from burnrate.cli import main
         import io
         from contextlib import redirect_stdout
+
+        from burnrate.cli import main
 
         records, secret = self.session_with_secret()
         with TranscriptFixture(records) as fixture:
@@ -186,9 +195,10 @@ class TestRedactionHappensAtCapture(unittest.TestCase):
         json.loads(payload)  # still valid JSON
 
     def test_secret_absent_from_verbose_text_output(self):
-        from burnrate.cli import main
         import io
         from contextlib import redirect_stdout
+
+        from burnrate.cli import main
 
         records, secret = self.session_with_secret()
         with TranscriptFixture(records) as fixture:
@@ -201,3 +211,61 @@ class TestRedactionHappensAtCapture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFastPathIsSound(unittest.TestCase):
+    """The pre-screen must never change an answer, only skip work.
+
+    A token missing from the pre-screen silently disables the pattern that
+    needs it — the failure would be invisible, and the consequence is a leaked
+    credential. So every positive case is re-checked with the pre-screen
+    bypassed, and the two must agree.
+    """
+
+    def _redact_without_fast_path(self, text):
+        """Run the full pattern pass unconditionally."""
+        import burnrate.redact as module
+
+        original = module._PRESCREEN
+        try:
+            module._PRESCREEN = re.compile(r"")  # matches everything
+            return module.redact(text)
+        finally:
+            module._PRESCREEN = original
+
+    def test_fast_path_cannot_miss(self):
+        cases = [
+            "export ANTHROPIC_API_KEY=" + fake("sk-", "ant-" + "N0TAREAL" * 3),
+            "gh auth login --with-token " + fake("ghp", "_" + "N0TAREAL" * 3),
+            "aws configure set aws_access_key_id " + fake("AKIA", "N0TAREALKEYID000"),
+            'curl -H "Authorization: Bearer ' + fake("eyJ", "N0T.AREAL.JWT00000") + '"',
+            "docker run -e DB_PASSWORD=" + fake("N0T", "AREALPASSWORD"),
+            'psql "postgresql://user:' + fake("N0T", "AREALPASS") + '@localhost/db"',
+            "stripe --api-key " + fake("sk", "_live_" + "N0TAREAL" * 2),
+            "glab auth login --token " + fake("glpat", "-" + "N0TAREAL" * 2),
+            "curl 'https://x/?key=" + fake("AIza", "N0TAREAL" * 4) + "'",
+        ]
+        for text in cases:
+            with self.subTest(text=text[:40]):
+                self.assertEqual(
+                    redact(text),
+                    self._redact_without_fast_path(text),
+                    "fast path skipped a real secret",
+                )
+
+    def test_fast_path_agrees_on_ordinary_commands(self):
+        for text in (
+            "npm run build && npm test",
+            "git checkout 3f2a9c8e1d4b7a6f5e0c9d8b7a6f5e4d3c2b1a09",
+            "ls -la ~/Projects",
+            "python3 -m pytest tests/",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(redact(text), self._redact_without_fast_path(text))
+
+    def test_fast_path_actually_skips(self):
+        """If this stops being true, the optimization is doing nothing."""
+        import burnrate.redact as module
+
+        self.assertIsNone(module._PRESCREEN.search("npm run build && npm test"))
+        self.assertIsNotNone(module._PRESCREEN.search("export API_KEY=abcdefgh"))

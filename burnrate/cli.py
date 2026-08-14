@@ -1,11 +1,11 @@
 """Command line interface.
 
-    burnrate                      # receipt for the most recent session
-    burnrate --last 5             # the last five sessions
-    burnrate --today              # everything from today
-    burnrate --summary day        # roll up by day, project, or model
-    burnrate --project nalee      # filter to one project
-    burnrate guard --cap 5.00     # hook: stop a session at a spend cap
+burnrate                      # receipt for the most recent session
+burnrate --last 5             # the last five sessions
+burnrate --today              # everything from today
+burnrate --summary day        # roll up by day, project, or model
+burnrate --project nalee      # filter to one project
+burnrate guard --cap 5.00     # hook: stop a session at a spend cap
 """
 
 from __future__ import annotations
@@ -52,9 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="how many recent sessions to report (default: 1)",
     )
     selection.add_argument("--all", action="store_true", help="every session found")
-    selection.add_argument(
-        "--today", action="store_true", help="sessions active today"
-    )
+    selection.add_argument("--today", action="store_true", help="sessions active today")
     selection.add_argument(
         "--since", metavar="YYYY-MM-DD", help="sessions active on or after this date"
     )
@@ -108,7 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--quiet", action="store_true", help="only print on warn or block"
     )
 
-    parser.add_argument("--version", action="version", version="burnrate %s" % __version__)
+    parser.add_argument(
+        "--version", action="version", version="burnrate %s" % __version__
+    )
     return parser
 
 
@@ -173,15 +173,11 @@ def _select_sessions(args, since: Optional[str]):
     if args.session:
         session = parse_file(os.path.expanduser(args.session))
         if session is None:
-            raise SessionError(
-                "no billable usage found in %s" % args.session
-            )
+            raise SessionError("no billable usage found in %s" % args.session)
         return [session]
 
     limit = None if (args.all or args.summary or since) else args.last
-    sessions = discover(
-        root=args.root, project=args.project, since=since, limit=limit
-    )
+    sessions = discover(root=args.root, project=args.project, since=since, limit=limit)
     if not args.all and not args.summary and not since:
         return sessions[: args.last]
     return sessions

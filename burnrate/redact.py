@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from typing import List, Pattern, Tuple
 
-__all__ = ["redact", "redact_all", "PATTERNS"]
+__all__ = ["PATTERNS", "redact", "redact_all"]
 
 
 def _mask(value: str, keep: int = 3) -> str:
@@ -56,15 +56,23 @@ PATTERNS: Tuple[Tuple[Pattern, int], ...] = (
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), 0),
     # Credentials embedded in a URL: postgres://user:pass@host, https://u:p@h
     (
-        re.compile(
-            r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@'\"]+:)([^\s@'\"]{3,})(@)"
-        ),
+        re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@'\"]+:)([^\s@'\"]{3,})(@)"),
         2,
     ),
     # Private key blocks.
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), 0),
+    (
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+        ),
+        0,
+    ),
     # Authorization headers, in any of the shapes a shell line takes.
-    (re.compile(r"(?i)(authorization\s*:\s*(?:bearer|basic|token)\s+)([^\s\"']{8,})"), 2),
+    (
+        re.compile(
+            r"(?i)(authorization\s*:\s*(?:bearer|basic|token)\s+)([^\s\"']{8,})"
+        ),
+        2,
+    ),
     # Assignments to secret-sounding names: KEY=..., --token=..., "password": "..."
     (
         re.compile(
@@ -88,16 +96,51 @@ PATTERNS: Tuple[Tuple[Pattern, int], ...] = (
 #: would make the output worse for no gain.
 _SAFE_VALUES = frozenset(
     {
-        "true", "false", "null", "none", "nil", "yes", "no", "0", "1",
-        "changeme", "example", "placeholder", "test", "dummy", "redacted",
+        "true",
+        "false",
+        "null",
+        "none",
+        "nil",
+        "yes",
+        "no",
+        "0",
+        "1",
+        "changeme",
+        "example",
+        "placeholder",
+        "test",
+        "dummy",
+        "redacted",
         # Auth *scheme* words. `Authorization: Bearer $TOKEN` otherwise trips
         # the assignment rule — "Authorization" contains AUTH — and masks the
         # scheme instead of the value, which hides nothing and looks broken.
-        "bearer", "basic", "digest", "token",
+        "bearer",
+        "basic",
+        "digest",
+        "token",
     }
 )
 
 _REFERENCE = re.compile(r"^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$|^\$\(")
+
+#: A single cheap pre-check. The overwhelming majority of captured commands
+#: (`npm test`, `git status`, `ls`) contain nothing resembling a credential, and
+#: running sixteen substitutions over each of them dominated the runtime of a
+#: whole-history report — 441k regex calls, several seconds, all of it finding
+#: nothing.
+#:
+#: This alternation is the union of the cheapest distinguishing token from every
+#: pattern below. If none of them appear, no pattern can match, so the full pass
+#: is skipped. It must stay a strict superset: a token missing here silently
+#: disables the pattern that needs it, which is why `test_fast_path_cannot_miss`
+#: re-checks every positive case with the fast path disabled.
+_PRESCREEN = re.compile(
+    r"(?i)"
+    r"sk-|sk_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|glpat-|npm_"
+    r"|eyJ|BEGIN [A-Z ]*PRIVATE KEY|authorization"
+    r"|api[_-]?key|secret|token|password|passwd|credential|private[_-]?key"
+    r"|access[_-]?key|auth|://[^\s]*:"
+)
 
 
 def redact(text: str) -> str:
@@ -111,8 +154,13 @@ def redact(text: str) -> str:
     if not text:
         return text
 
+    # Fast path: nothing credential-shaped is present, so no pattern can match.
+    if not _PRESCREEN.search(text):
+        return text
+
     result = text
     for pattern, group in PATTERNS:
+
         def replace(match, _group=group):
             if _group == 0:
                 return _mask(match.group(0))
@@ -122,7 +170,7 @@ def redact(text: str) -> str:
             if _REFERENCE.match(value.strip()) or value.strip().lower() in _SAFE_VALUES:
                 return match.group(0)
             prefix = match.group(0)[: match.start(_group) - match.start(0)]
-            suffix = match.group(0)[match.end(_group) - match.start(0):]
+            suffix = match.group(0)[match.end(_group) - match.start(0) :]
             return prefix + _mask(value) + suffix
 
         result = pattern.sub(replace, result)

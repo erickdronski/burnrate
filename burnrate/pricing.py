@@ -27,16 +27,16 @@ import json
 from typing import Any, Dict, Mapping, Optional
 
 __all__ = [
+    "CACHE_READ_MULTIPLIER",
+    "CACHE_WRITE_1H_MULTIPLIER",
+    "CACHE_WRITE_5M_MULTIPLIER",
     "PRICES",
     "PRICES_AS_OF",
-    "CACHE_WRITE_5M_MULTIPLIER",
-    "CACHE_WRITE_1H_MULTIPLIER",
-    "CACHE_READ_MULTIPLIER",
-    "Usage",
-    "price_usage",
-    "load_price_overrides",
-    "resolve_model",
     "PricingError",
+    "Usage",
+    "load_price_overrides",
+    "price_usage",
+    "resolve_model",
 ]
 
 #: The date these prices were verified. Printed on every report.
@@ -84,11 +84,11 @@ class Usage:
     """Token counts for one API response, split the way billing splits them."""
 
     __slots__ = (
+        "cache_read_tokens",
+        "cache_write_1h_tokens",
+        "cache_write_5m_tokens",
         "input_tokens",
         "output_tokens",
-        "cache_read_tokens",
-        "cache_write_5m_tokens",
-        "cache_write_1h_tokens",
     )
 
     def __init__(
@@ -208,8 +208,7 @@ def price_usage(
         output_rate = float(rate["output"])
     except (KeyError, TypeError, ValueError):
         raise PricingError(
-            "price entry for %r must have numeric 'input' and 'output' rates"
-            % key
+            "price entry for %r must have numeric 'input' and 'output' rates" % key
         )
 
     per_token_input = input_rate / 1_000_000
@@ -260,7 +259,7 @@ def load_price_overrides(path: str) -> Dict[str, Dict[str, float]]:
     except FileNotFoundError:
         raise PricingError("no such price file: %s" % path)
     except json.JSONDecodeError as exc:
-        raise PricingError("%s is not valid JSON: %s" % (path, exc))
+        raise PricingError("%s is not valid JSON: %s" % (path, exc)) from exc
 
     if not isinstance(raw, dict):
         raise PricingError("price file must contain a JSON object")

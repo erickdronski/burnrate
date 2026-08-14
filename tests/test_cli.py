@@ -105,7 +105,7 @@ class TestCLI(unittest.TestCase):
     def test_json_output_is_valid(self):
         records = [assistant("m", output_tokens=1_000_000)]
         with TranscriptFixture(records) as fixture:
-            code, out, _ = run_cli("--root", fixture.root, "--format", "json")
+            _code, out, _ = run_cli("--root", fixture.root, "--format", "json")
         payload = json.loads(out)
         self.assertEqual(len(payload), 1)
         self.assertAlmostEqual(payload[0]["cost"], 25.0, places=6)
@@ -150,8 +150,13 @@ class TestCLI(unittest.TestCase):
         records = [assistant("m", output_tokens=1_000_000)]
         with TranscriptFixture(records) as fixture:
             code, out, _ = run_cli(
-                "guard", "--cap", "1.00", "--transcript", fixture.path,
-                "--format", "json",
+                "guard",
+                "--cap",
+                "1.00",
+                "--transcript",
+                fixture.path,
+                "--format",
+                "json",
             )
         payload = json.loads(out)
         self.assertEqual(payload["state"], "block")

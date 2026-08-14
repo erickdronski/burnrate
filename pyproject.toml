@@ -30,3 +30,32 @@ burnrate = "burnrate.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["burnrate*"]
+
+[tool.ruff]
+# The package targets Python 3.9, so pyupgrade must not propose 3.10+ syntax
+# (`X | None`, builtin generics at runtime). Setting this here is the
+# difference between a linter that finds real problems and one that produces
+# 300 inapplicable suggestions everyone learns to ignore.
+target-version = "py39"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "C4", "SIM", "RUF"]
+ignore = [
+  "E501",    # line length is enforced by review, not by a hard error
+  "SIM105",  # contextlib.suppress is not clearer than a two-line try/except
+  "RUF001",  # unicode in prose strings is intentional throughout
+  "RUF002",
+  "RUF003",
+  "B904",    # `raise X from exc` inside except. Applied where it helps; the
+             # remaining sites raise a domain error whose message already names
+             # the cause, and chaining there adds a second traceback that
+             # obscures the actionable message rather than clarifying it.
+  "BLE001",  # blind `except Exception` is deliberate in this codebase: the
+             # fail-open handlers exist so a malformed input file degrades one
+             # section rather than aborting the run, and narrowing them would
+             # defeat the purpose. Each site says so in a comment.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

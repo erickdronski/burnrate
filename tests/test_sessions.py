@@ -129,9 +129,7 @@ class TestDeduplication(unittest.TestCase):
         ] * 3
         with TranscriptFixture(records) as fixture:
             session = parse_file(fixture.path)
-        naive = sum(
-            r["message"]["usage"]["output_tokens"] for r in records
-        )
+        naive = sum(r["message"]["usage"]["output_tokens"] for r in records)
         self.assertEqual(naive, 600)
         self.assertEqual(session.total_usage().output_tokens, 200)
 
@@ -329,3 +327,50 @@ class TestGuard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLinePrefilterIsSound(unittest.TestCase):
+    """Skipping records must never change a result, only save time.
+
+    The parser skips lines whose type token marks them as uninteresting. If
+    that check were wrong it would silently drop billable usage, which is the
+    one error this tool cannot afford — so the skipped types are asserted
+    explicitly and an unknown type is asserted to still be parsed.
+    """
+
+    def test_ignored_record_types_do_not_affect_totals(self):
+        billing = [assistant("m", output_tokens=100)]
+        noise = [
+            {"type": "queue-operation", "operation": "x"},
+            {"type": "attachment", "attachment": {}},
+            {"type": "last-prompt", "lastPrompt": "hi"},
+            {"type": "ai-title", "aiTitle": "t"},
+            {"type": "mode", "mode": "default"},
+        ]
+        with TranscriptFixture(billing) as clean:
+            expected = parse_file(clean.path).total_usage().output_tokens
+        with TranscriptFixture(billing + noise) as noisy:
+            actual = parse_file(noisy.path).total_usage().output_tokens
+        self.assertEqual(expected, actual, "prefilter changed the answer")
+
+    def test_pretty_printed_json_is_still_parsed(self):
+        """A format change must degrade speed, not correctness.
+
+        The prefilter matches a compact `"type":"..."` token. If transcripts
+        were ever written with whitespace, the token would not match and the
+        line must fall through to the parser rather than being dropped.
+        """
+        record = assistant("m", output_tokens=7)
+        with TranscriptFixture([]) as fixture:
+            with open(fixture.path, "w", encoding="utf-8") as handle:
+                # `"type": "assistant"` — spaced, so the compact token is absent
+                handle.write(
+                    json.dumps(record, indent=None, separators=(", ", ": ")) + "\n"
+                )
+            session = parse_file(fixture.path)
+        self.assertIsNotNone(session, "a spaced record was wrongly skipped")
+        self.assertEqual(session.total_usage().output_tokens, 7)
+
+    def test_assistant_records_are_never_skipped(self):
+        with TranscriptFixture([assistant("m", output_tokens=42)]) as fixture:
+            self.assertEqual(parse_file(fixture.path).total_usage().output_tokens, 42)
