@@ -20,7 +20,13 @@ from typing import Any, Dict, List, Optional, Sequence
 from . import __version__
 from .guard import DEFAULT_WARN_AT, run_guard
 from .pricing import PricingError, load_price_overrides
-from .receipt import price_session, render_session, render_summary
+from .receipt import (
+    price_session,
+    render_session,
+    render_summary,
+    render_top,
+    render_trend,
+)
 from .sessions import SessionError, discover, parse_file
 
 __all__ = ["main"]
@@ -69,6 +75,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--summary",
         choices=("day", "project", "model"),
         help="roll up instead of printing individual receipts",
+    )
+    output.add_argument(
+        "--top",
+        nargs="?",
+        type=int,
+        const=10,
+        metavar="N",
+        help="rank the most expensive sessions (default: top 10)",
+    )
+    output.add_argument(
+        "--trend",
+        action="store_true",
+        help="daily spend with a chart and whether it is rising",
     )
     output.add_argument(
         "--verbose",
@@ -160,6 +179,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         sys.stdout.write(json.dumps(_jsonable(reports), indent=2) + "\n")
         return 0
 
+    if args.top:
+        sys.stdout.write(render_top(reports, limit=args.top) + "\n")
+        return 0
+
+    if args.trend:
+        sys.stdout.write(render_trend(reports) + "\n")
+        return 0
+
     if args.summary:
         sys.stdout.write(render_summary(reports, args.summary) + "\n")
         return 0
@@ -176,9 +203,9 @@ def _select_sessions(args, since: Optional[str]):
             raise SessionError("no billable usage found in %s" % args.session)
         return [session]
 
-    limit = None if (args.all or args.summary or since) else args.last
+    limit = None if (args.all or args.summary or args.top or args.trend or since) else args.last
     sessions = discover(root=args.root, project=args.project, since=since, limit=limit)
-    if not args.all and not args.summary and not since:
+    if not args.all and not args.summary and not args.top and not args.trend and not since:
         return sessions[: args.last]
     return sessions
 

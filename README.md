@@ -17,7 +17,7 @@ Local, offline, zero dependencies, no API key.</p>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-174ea6">
   <img alt="Linux macOS Windows" src="https://img.shields.io/badge/tested_on-Linux%20%7C%20macOS%20%7C%20Windows-0f766e">
   <img alt="ruff" src="https://img.shields.io/badge/lint-ruff-d97706">
-  <img alt="78 tests" src="https://img.shields.io/badge/tests-114-6b21a8">
+  <img alt="78 tests" src="https://img.shields.io/badge/tests-129-6b21a8">
 </p>
 
 ---
@@ -148,6 +148,8 @@ burnrate                     # the most recent session
 burnrate --last 5            # the last five
 burnrate --today             # everything from today
 burnrate --project nalee     # one project
+burnrate --top               # the sessions that cost the most
+burnrate --trend             # daily spend, and whether it is rising
 burnrate --summary day       # roll up by day, project, or model
 burnrate --verbose           # files touched and commands run
 burnrate --format json       # everything, for your own tooling
@@ -194,6 +196,42 @@ both are worth knowing about because they are easy to get wrong:
   costs speed rather than correctness.
 
 Output was verified byte-identical across all 412 sessions before and after.
+
+## What actually cost you money
+
+A day-by-day total tells you *that* Tuesday was expensive. These answer the
+questions you can act on.
+
+```bash
+burnrate --top      # which sessions cost the most
+burnrate --trend    # is my spend rising?
+```
+
+```
+  DATE       PROJECT           TURNS    TOKENS     COST
+  2026-06-28 nalee              3873   2158.5M $2,043.47  36%
+  2026-07-02 lore               3191   1724.5M $1,440.77  25%
+  2026-06-28 scout              1124    587.9M   $484.73   9%
+
+  These 3 session(s) are 70% of $5,699.18 across 412 session(s).
+```
+
+```
+  2026-08-12   $388.04 ███░░░░░░░░░░░░░░░░░   194 session(s)
+  2026-08-13 $2,556.38 ███████████████████░   103 session(s)
+  2026-08-14 $2,756.25 ████████████████████   115 session(s)
+
+  Daily average is up 610% across this window ($388.04 -> $2,756.25).
+  5 session(s) spanned more than one day and are counted on the day they
+  last ran.
+```
+
+That last line matters. A long session gets resumed across weeks, and
+attributing its whole cost to the day it *began* dumps months of spend onto one
+old bar. Sessions are counted on the day they last ran, and the number that
+span more than one day is reported rather than hidden — because a multi-day
+session's cost genuinely did not happen on a single day, and no bucketing
+choice makes that untrue.
 
 ## Prices
 
@@ -245,7 +283,7 @@ and UUIDs. Treat a report as sensitive before sharing it.
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .   # 114 tests
+python -m unittest discover -s tests -t .   # 129 tests
 ```
 
 Pricing tests check against hand-computed rates rather than snapshots — a

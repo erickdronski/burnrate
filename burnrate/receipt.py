@@ -98,6 +98,7 @@ def price_session(
         "session_id": session.session_id,
         "project": session.project,
         "date": session.date,
+        "end_date": session.end_date,
         "branch": session.git_branch,
         "turns": session.turn_count,
         "tool_calls": session.tool_calls,
@@ -228,6 +229,118 @@ def render_session(
     lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
     lines.append("")
     return "\n".join(lines)
+
+
+def render_top(reports, limit: int = 10, width: int = 64) -> str:
+    """The sessions that actually cost you money, ranked.
+
+    A day-by-day roll-up tells you *that* Tuesday was expensive. It does not
+    tell you which session did it, and that is the only version of the question
+    anyone can act on — you go look at that session and decide whether the work
+    was worth it.
+    """
+    rule = "─" * width
+    ranked = sorted(reports, key=lambda r: -r["cost"])[:limit]
+    total = sum(r["cost"] for r in reports)
+
+    lines = [rule, "  MOST EXPENSIVE SESSIONS", rule, ""]
+    lines.append("  %-10s %-14s %8s %9s %8s" % ("DATE", "PROJECT", "TURNS", "TOKENS", "COST"))
+    for report in ranked:
+        share = (report["cost"] / total * 100) if total else 0
+        lines.append(
+            "  %-10s %-14s %8d %9s %8s%s"
+            % (
+                (report["date"] or "—")[:10],
+                (report["project"] or "—")[:14],
+                report["turns"],
+                fmt_tokens(report["usage"].total_tokens),
+                fmt_money(report["cost"]),
+                "  %2.0f%%" % share if share >= 1 else "",
+            )
+        )
+    lines.append("")
+    if ranked and total:
+        top_share = sum(r["cost"] for r in ranked) / total * 100
+        lines.append(
+            "  These %d session(s) are %.0f%% of %s across %d session(s)."
+            % (len(ranked), top_share, fmt_money(total), len(reports))
+        )
+    lines.append("")
+    lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_trend(reports, width: int = 64) -> str:
+    """Daily spend with a bar, and whether the trend is up or down.
+
+    The number people actually want is not "what did I spend" but "am I
+    spending more than I was", and that is a comparison a table of totals makes
+    you do in your head.
+    """
+    rule = "─" * width
+    by_day = {}
+    spanning = 0
+    for report in reports:
+        # Attribute a session to the day it *finished*, not the day it began.
+        # Long sessions get resumed across weeks, and bucketing by start date
+        # dumps months of spend onto a single old bar. Neither choice is truly
+        # correct — a multi-day session's cost did not happen on one day — so
+        # the count of spanning sessions is reported rather than hidden.
+        day = report.get("end_date") or report["date"] or "(undated)"
+        if report.get("end_date") and report.get("date") and report["end_date"] != report["date"]:
+            spanning += 1
+        entry = by_day.setdefault(day, {"cost": 0.0, "sessions": 0, "tokens": 0})
+        entry["cost"] += report["cost"]
+        entry["sessions"] += 1
+        entry["tokens"] += report["usage"].total_tokens
+
+    days = sorted(by_day)
+    if not days:
+        return "No sessions to chart."
+
+    peak = max(by_day[d]["cost"] for d in days) or 1.0
+    lines = [rule, "  DAILY BURN", rule, ""]
+    for day in days:
+        entry = by_day[day]
+        lines.append(
+            "  %-10s %9s %-22s %d session(s)"
+            % (day, fmt_money(entry["cost"]), bar(entry["cost"] / peak, 20), entry["sessions"])
+        )
+
+    lines.append("")
+    # Compare the two halves rather than first-vs-last day: a single quiet
+    # Sunday would otherwise read as a collapse in spending.
+    half = max(1, len(days) // 2)
+    earlier = sum(by_day[d]["cost"] for d in days[:half]) / half
+    later = sum(by_day[d]["cost"] for d in days[-half:]) / half
+    if earlier > 0:
+        change = (later - earlier) / earlier * 100
+        direction = "up" if change > 0 else "down"
+        lines.append(
+            "  Daily average is %s %.0f%% across this window (%s -> %s)."
+            % (direction, abs(change), fmt_money(earlier), fmt_money(later))
+        )
+    total = sum(by_day[d]["cost"] for d in days)
+    lines.append(
+        "  %s over %d day(s); %s per day on average."
+        % (fmt_money(total), len(days), fmt_money(total / len(days)))
+    )
+    if spanning:
+        lines.append(
+            "  %d session(s) spanned more than one day and are counted on the "
+            "day they last ran." % spanning
+        )
+    lines.append("")
+    lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def bar(fraction: float, width: int = 20) -> str:
+    fraction = max(0.0, min(1.0, float(fraction)))
+    filled = int(round(fraction * width))
+    return "█" * filled + "░" * (width - filled)
 
 
 def render_summary(

@@ -126,9 +126,23 @@ class Session:
 
     @property
     def date(self) -> Optional[str]:
+        """The day this session started."""
         if not self.first_timestamp:
             return None
         return self.first_timestamp[:10]
+
+    @property
+    def end_date(self) -> Optional[str]:
+        """The day this session last ran.
+
+        Reporting by end date is what makes a spend chart reflect recent
+        activity: a session begun in June and resumed through August did most
+        of its spending in August, and bucketing it by start date hides that
+        entirely.
+        """
+        if not self.last_timestamp:
+            return None
+        return self.last_timestamp[:10]
 
 
 #: Tool names whose input carries a file path worth recording.
