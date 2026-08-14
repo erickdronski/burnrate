@@ -28,6 +28,7 @@ import re
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from .pricing import NON_BILLABLE_MODELS, Usage
+from .redact import redact
 
 __all__ = [
     "Session",
@@ -258,7 +259,10 @@ def _absorb_tool_uses(session: Session, message: dict) -> None:
         if name == "Bash":
             command = payload.get("command")
             if isinstance(command, str) and command.strip():
-                session.commands.append(command.strip())
+                # Redact at capture, not at render. A secret that never enters
+                # the object graph cannot be leaked by an output path someone
+                # adds later.
+                session.commands.append(redact(command.strip()))
         elif name in _FILE_TOOLS:
             target = payload.get("file_path") or payload.get("notebook_path")
             if isinstance(target, str) and target:

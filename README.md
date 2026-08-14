@@ -15,7 +15,7 @@ Local, offline, zero dependencies, no API key.</p>
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-101828">
   <img alt="zero dependencies" src="https://img.shields.io/badge/dependencies-0-08775c">
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-174ea6">
-  <img alt="78 tests" src="https://img.shields.io/badge/tests-78-6b21a8">
+  <img alt="78 tests" src="https://img.shields.io/badge/tests-105-6b21a8">
 </p>
 
 ---
@@ -193,10 +193,33 @@ It reads `~/.claude/projects/**/*.jsonl` and writes nothing. There is no network
 code in this package at all — no telemetry, no update check, no analytics. The
 only way data leaves your machine is if you pipe the JSON somewhere yourself.
 
+**Secrets in captured commands are masked.** `--verbose` and `--format json`
+print the shell commands your agent ran, and agent sessions routinely contain
+`export ANTHROPIC_API_KEY=sk-...` or a `curl` with a bearer token. Since a cost
+report is exactly the kind of file that gets pasted into an issue, every command
+is redacted **at capture** — the raw value never enters the object graph, so no
+output path can leak it, including one added later.
+
+```
+export ANTHROPIC_API_KEY=sk-…redacted…
+curl -H "Authorization: Bearer eyJ…redacted…" https://api.example.com
+```
+
+Provider-prefixed keys, JWTs, AWS key ids, URL-embedded passwords, and
+`SECRET=`-style assignments are covered. Ordinary commands are left alone —
+`git checkout <sha>`, `pytest -k password`, and `export API_KEY=${API_KEY}` all
+survive intact, because a redactor that mangles normal output gets switched off
+and then protects nothing.
+
+**It is best-effort, not a guarantee.** A secret with no recognizable shape,
+assigned to an innocuously named variable, will pass through. Deliberately: the
+alternative is redacting anything long and random, which would eat commit SHAs
+and UUIDs. Treat a report as sensitive before sharing it.
+
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .   # 78 tests
+python -m unittest discover -s tests -t .   # 105 tests
 ```
 
 Pricing tests check against hand-computed rates rather than snapshots — a
