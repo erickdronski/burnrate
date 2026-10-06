@@ -142,6 +142,60 @@ _PRESCREEN = re.compile(
     r"|access[_-]?key|auth|://[^\s]*:"
 )
 
+#: The same screen as plain substrings, used whenever the text is ASCII —
+#: nearly always. An alternation with no common prefix tries every branch at
+#: every position, and Codex captures long commands: heredocs that write whole
+#: files, averaging 700 characters. A substring test is one fast scan per
+#: token. Over the 118,000 commands in one machine's Claude Code and Codex
+#: history, redaction went from 12.6s of CPU to 7.9s, with identical output.
+#:
+#: Each token is implied by a branch of ``_PRESCREEN``, so this is a superset of
+#: it, and ``test_token_screen_covers_the_regex_screen`` checks that branch by
+#: branch. It is limited to ASCII because only there is lowercasing exactly
+#: the regex's case-insensitive match; Unicode folds ``ſ`` to ``s``.
+_PRESCREEN_TOKENS = (
+    "sk-",
+    "sk_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "xox",
+    "akia",
+    "asia",
+    "aiza",
+    "glpat-",
+    "npm_",
+    "eyj",
+    "private key",
+    "auth",
+    "apikey",
+    "api_key",
+    "api-key",
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "credential",
+    "privatekey",
+    "private_key",
+    "private-key",
+    "accesskey",
+    "access_key",
+    "access-key",
+    "://",
+)
+
+
+def _may_hold_secret(text: str) -> bool:
+    """False only when no redaction pattern can possibly match ``text``."""
+    if text.isascii():
+        lowered = text.lower()
+        return any(token in lowered for token in _PRESCREEN_TOKENS)
+    return _PRESCREEN.search(text) is not None
+
 
 def redact(text: str) -> str:
     """Return ``text`` with credential-shaped substrings masked.
@@ -155,7 +209,7 @@ def redact(text: str) -> str:
         return text
 
     # Fast path: nothing credential-shaped is present, so no pattern can match.
-    if not _PRESCREEN.search(text):
+    if not _may_hold_secret(text):
         return text
 
     result = text

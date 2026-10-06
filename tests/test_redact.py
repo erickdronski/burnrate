@@ -13,7 +13,6 @@ Two halves, and both matter equally:
 """
 
 import json
-import re
 import unittest
 
 from burnrate.redact import redact, redact_all
@@ -226,12 +225,12 @@ class TestFastPathIsSound(unittest.TestCase):
         """Run the full pattern pass unconditionally."""
         import burnrate.redact as module
 
-        original = module._PRESCREEN
+        original = module._may_hold_secret
         try:
-            module._PRESCREEN = re.compile(r"")  # matches everything
+            module._may_hold_secret = lambda _text: True
             return module.redact(text)
         finally:
-            module._PRESCREEN = original
+            module._may_hold_secret = original
 
     def test_fast_path_cannot_miss(self):
         cases = [
@@ -269,3 +268,61 @@ class TestFastPathIsSound(unittest.TestCase):
 
         self.assertIsNone(module._PRESCREEN.search("npm run build && npm test"))
         self.assertIsNotNone(module._PRESCREEN.search("export API_KEY=abcdefgh"))
+        self.assertFalse(module._may_hold_secret("npm run build && npm test"))
+        self.assertTrue(module._may_hold_secret("export API_KEY=abcdefgh"))
+
+    def test_token_screen_covers_the_regex_screen(self):
+        """One sample per branch of the regex, in mixed case: wherever the
+        regex screen would run the full pass, the substring screen must too."""
+        import burnrate.redact as module
+
+        branches = [
+            "x sk-1",
+            "x SK_1",
+            "ghp_",
+            "GHO_x",
+            "ghu_",
+            "Ghs_",
+            "ghr_",
+            "GITHUB_PAT_x",
+            "xoxb-1",
+            "XOXS-1",
+            "akia",
+            "ASIA",
+            "aIzA",
+            "GLPAT-",
+            "npm_",
+            "EYJ",
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "begin  private key",
+            "Authorization: x",
+            "API_KEY",
+            "api-key",
+            "ApiKey",
+            "my_secret",
+            "TOKEN=",
+            "Password",
+            "passwd",
+            "CREDENTIALS",
+            "private_key",
+            "PRIVATEKEY",
+            "private-key",
+            "access-key",
+            "AccessKey",
+            "ACCESS_KEY",
+            "oauth",
+            "postgres://u:p@h",
+            "see https://x.com/a:b",
+        ]
+        for text in branches:
+            with self.subTest(text=text):
+                self.assertIsNotNone(module._PRESCREEN.search(text), "bad sample")
+                self.assertTrue(module._may_hold_secret(text))
+
+    def test_non_ascii_text_falls_back_to_the_regex_screen(self):
+        """`ſ` folds to `s` under the regex's IGNORECASE but not under lower()."""
+        import burnrate.redact as module
+
+        text = "export MY_ſECRET=" + fake("N0T", "AREALVALUE")
+        self.assertIsNotNone(module._PRESCREEN.search(text))
+        self.assertTrue(module._may_hold_secret(text))
