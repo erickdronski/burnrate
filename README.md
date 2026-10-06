@@ -18,7 +18,7 @@ Local, offline, zero dependencies, no API key.</p>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-174ea6">
   <img alt="Linux macOS Windows" src="https://img.shields.io/badge/tested_on-Linux%20%7C%20macOS%20%7C%20Windows-0f766e">
   <img alt="ruff" src="https://img.shields.io/badge/lint-ruff-d97706">
-  <img alt="78 tests" src="https://img.shields.io/badge/tests-129-6b21a8">
+  <img alt="204 tests" src="https://img.shields.io/badge/tests-204-6b21a8">
 </p>
 
 ---
@@ -148,7 +148,7 @@ More places the arithmetic is easy to get wrong, and what this does:
   long sessions the 1-hour writes dominate.
 - **A new point release is not its predecessor.** `claude-opus-5-5` starts with
   `claude-opus-5`, and a prefix lookup prices it at the older model's rates —
-  which overstated Opus 5.5 by 79% here. Model names are matched exactly, after
+  which overstated Opus 5.5 by 80% here. Model names are matched exactly, after
   stripping a date (`-20250929`) or deployment suffix (`[1m]`, `@20251101`).
   A release the table doesn't know is reported as unpriced, not guessed at.
 - **Fast mode is priced per turn.** It is a per-request setting, so one session
@@ -204,10 +204,10 @@ thread, and `last_token_usage` for the latest response; CLI 0.15x also writes a
 of this machine's rollouts:
 
 ```
-sum of every token_count's last_token_usage     9,496,451,892
-  plus every token_usage_record                18,284,860,066
-final total_token_usage of each file            8,552,379,463
-burnrate: one usage per response_id             8,788,408,174
+sum of every token_count's last_token_usage     9,498,661,274
+  plus every token_usage_record                18,289,278,830
+final total_token_usage of each file            8,554,588,845
+burnrate: one usage per response_id             8,790,617,556
 ```
 
 - **Counting both sources doubles the bill (2.08×).** Every `token_count` that
@@ -220,7 +220,7 @@ burnrate: one usage per response_id             8,788,408,174
   calls are in the records but never reach the running total, and a session
   resumed after a restart starts it again from zero.
 - **Summing `total_token_usage` per event** — reading a cumulative counter as a
-  per-response one — would overstate usage 1,734×.
+  per-response one — would overstate usage 1,735×.
 
 `burnrate` counts one usage per `response_id`. A `token_count` is used only when
 no record arrived since the previous one — every event, on a CLI old enough not
@@ -234,7 +234,7 @@ ids are deduplicated across a session's files, and without records a fork's
 events from before `subagent_history_start_ordinal` are not counted.
 
 **What the counters mean**, checked rather than assumed:
-`reasoning_output_tokens` never exceeds `output_tokens` (66,160 of 66,160
+`reasoning_output_tokens` never exceeds `output_tokens` (66,178 of 66,178
 events), and `total_tokens` is exactly `input_tokens + output_tokens` on every
 event that stands for a model call — so reasoning is part of output and is not
 added again. `cached_input_tokens` never exceeds `input_tokens`: cached input is
@@ -251,15 +251,15 @@ your rates and they are priced like anything else:
 { "prices": { "gpt-6-astra": { "input": …, "cached_input": …, "output": … } } }
 ```
 
-Each `…` is your rate in US dollars per million tokens. (Left as is, the file is
-rejected — deliberately, since zeros would cost a few billion tokens at
-nothing.)
+Each `…` is your rate in US dollars per million tokens. Copied as is, the file
+is rejected rather than read as zeros, which would cost billions of tokens at
+nothing.
 
 **Plan usage is the number a subscriber can act on.** Codex logs the plan's own
 meter with every response, and burnrate prints the latest reading. It is the
 reading from when the log was written, not a live query — this package makes no
 network calls — so it says when it was taken and whether the window has rolled
-over since.
+over since. It prints on each Codex receipt and under every roll-up.
 
 Tool calls are counted from `function_call` and `custom_tool_call` items.
 Recent CLIs run most tools from generated JavaScript inside one `exec` call, so
@@ -309,27 +309,42 @@ commands run — which is often more interesting than the money.
 
 ## Performance
 
-Measured on 2,448 real transcripts (412 sessions, ~1.1M lines):
+Measured on one machine's full history — 4,488 Claude Code transcripts (6.6 GB)
+and 376 Codex rollouts (11.8 GB) — with Python 3.12. CPU time is the stable
+figure; wall time depends on how much of the history the page cache holds, and
+on a heavily loaded machine it ran 1.3–2.7× the CPU time.
 
-| | time |
+| | CPU time |
 |---|---|
-| `burnrate` (most recent session) | **0.17s** |
-| `burnrate --summary day` (entire history) | **10.4s** |
+| `burnrate` (most recent session) | **0.2s** |
+| `burnrate --agent codex` (most recent Codex session: 78 threads, 690M tokens) | **1.6s** |
+| `burnrate --agent claude --summary day` (entire Claude Code history) | **22s** (was 24s) |
+| `burnrate --agent codex --summary day` (entire Codex history) | **16s** |
+| `burnrate --summary day` (both) | **38s** |
 
-The whole-history scan started at 36.6s. Two things dominated the profile, and
-both are worth knowing about because they are easy to get wrong:
+At 0.1.0 the history was 2,448 transcripts and the whole-history scan took
+10.4s, down from 36.6s. Two things dominated that profile, and both are worth
+knowing about because they are easy to get wrong:
 
 - **Redaction ran 441,000 regex substitutions**, nearly all on commands like
   `npm test` that contain nothing secret-shaped. A single cheap pre-check now
   skips the full pass, and a test re-runs every positive case with the
-  pre-check disabled to prove it cannot mask a real secret by accident.
+  pre-check disabled to prove it cannot mask a real secret by accident. In
+  0.2.0 that pre-check became plain substring tests: Codex captures long
+  commands, and a 30-branch case-insensitive regex was itself the cost.
+  Redaction CPU fell from 12.6s to 7.9s, with identical output on all 117,891
+  commands.
 - **`json.loads` ran on every line**, including queue operations and titles
   that can never carry usage. A substring test on the raw line is roughly two
   orders of magnitude cheaper, and it is conservative: anything that does not
   clearly announce an uninteresting type still gets parsed, so a format change
-  costs speed rather than correctness.
+  costs speed rather than correctness. Codex lines are classified the same way
+  by an anchored match on their first few dozen bytes, which costs the same
+  for a 40-byte line as a 40-megabyte one; reading the 11.8 GB at all is now
+  most of the Codex time.
 
-Output was verified byte-identical across all 412 sessions before and after.
+`--since` and `--today` skip any file last written more than a day before the
+date without opening it.
 
 ## What actually cost you money
 
@@ -366,6 +381,11 @@ old bar. Sessions are counted on the day they last ran, and the number that
 span more than one day is reported rather than hidden — because a multi-day
 session's cost genuinely did not happen on a single day, and no bucketing
 choice makes that untrue.
+
+When Codex sessions are in the window, `--top` gains an AGENT column, `--trend`
+splits each day's sessions by agent, and every roll-up names the models it
+could not price, with their tokens, rather than leaving them out of a total
+that looks complete.
 
 ## Prices
 
@@ -445,14 +465,16 @@ and UUIDs. Treat a report as sensitive before sharing it.
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .   # 129 tests
+python -m unittest discover -s tests -t .   # 204 tests
 ```
 
 Pricing tests check against hand-computed rates rather than snapshots — a
 snapshot would happily lock in a wrong cache multiplier, which is the most
 likely error in the whole project. Parser tests build real transcripts on disk,
 including truncated final lines, because live logs are appended to while you
-read them.
+read them. The Codex fixtures reproduce the record sequences measured on real
+rollouts — the duplicate counts, the re-emitted totals, the compaction call only
+the records see, a resumed session's reset — and the shapes older CLIs wrote.
 
 ## Related
 
