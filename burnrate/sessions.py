@@ -186,7 +186,7 @@ def parse_file(path: str) -> Optional[Session]:
     useless exactly when someone wants it.
     """
     session_id = os.path.splitext(os.path.basename(path))[0]
-    project = _unslug(os.path.basename(os.path.dirname(path)))
+    project = _unslug(_project_folder(path))
     session = Session(path=path, session_id=session_id, project=project)
 
     # message.id -> the best usage record seen for it. See module docstring.
@@ -390,10 +390,11 @@ def discover(
             if not filename.endswith(".jsonl"):
                 continue
             full = os.path.join(dirpath, filename)
-            if project:
-                folder = os.path.basename(os.path.dirname(full))
-                if project.lower() not in _unslug(folder).lower():
-                    continue
+            if (
+                project
+                and project.lower() not in _unslug(_project_folder(full)).lower()
+            ):
+                continue
             try:
                 mtime = os.path.getmtime(full)
             except OSError:
@@ -413,6 +414,24 @@ def discover(
         if limit and len(sessions) >= limit:
             break
     return sessions
+
+
+def _project_folder(path: str) -> str:
+    """The ``~/.claude/projects`` folder a transcript belongs to.
+
+    Subagent transcripts live below their parent session, at
+    ``<project>/<session-id>/subagents/[workflows/<id>/]agent-*.jsonl``. Taking
+    the immediate parent folder named them all ``subagents`` — or after the
+    last fragment of a workflow id — which on the machine this was written on
+    was 98% of all transcripts, and made ``--project`` miss nearly every one.
+    """
+    parts = os.path.normpath(path).split(os.sep)
+    folders = parts[:-1]
+    if "subagents" in folders:
+        index = len(folders) - 1 - folders[::-1].index("subagents")
+        if index >= 2:
+            return folders[index - 2]
+    return folders[-1] if folders else ""
 
 
 def _unslug(folder: str) -> str:

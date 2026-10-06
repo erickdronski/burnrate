@@ -6,7 +6,13 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from burnrate.cli import main
-from burnrate.receipt import fmt_money, fmt_tokens, price_session, render_summary
+from burnrate.receipt import (
+    fmt_money,
+    fmt_tokens,
+    price_session,
+    render_session,
+    render_summary,
+)
 from burnrate.sessions import parse_file
 
 from .test_sessions import TranscriptFixture, assistant, tool_use
@@ -127,6 +133,28 @@ class TestRenderSummary(unittest.TestCase):
         self.assertIn("claude-opus-5 (fast)", text)
         self.assertIn("$50.00", text)  # the fast line
         self.assertIn("$75.00", text)  # the total: $25 standard + $50 fast
+
+
+class TestRenderSession(unittest.TestCase):
+    def render(self, records):
+        with TranscriptFixture(records) as fixture:
+            return render_session(price_session(parse_file(fixture.path)))
+
+    def test_a_resumed_session_shows_the_days_it_ran(self):
+        """Headed with the day it began, a month-long session's receipt looked
+        a month old on the day it last ran."""
+        text = self.render(
+            [
+                assistant("m1", output_tokens=1, timestamp="2026-09-05T10:00:00Z"),
+                assistant("m2", output_tokens=1, timestamp="2026-10-06T09:00:00Z"),
+            ]
+        )
+        self.assertIn("demo   2026-09-05 → 2026-10-06", text)
+
+    def test_a_single_day_session_shows_one_date(self):
+        text = self.render([assistant("m", output_tokens=1)])
+        self.assertIn("demo   2026-08-14\n", text)
+        self.assertNotIn("→", text)
 
 
 class TestCLI(unittest.TestCase):

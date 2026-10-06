@@ -268,6 +268,33 @@ class TestDiscovery(unittest.TestCase):
             sessions = discover(root=fixture.root)
         self.assertEqual(len(sessions), 1)
 
+    def write_subagent(self, fixture, *folders):
+        """Place a transcript where Claude Code writes subagent sessions."""
+        folder = os.path.join(
+            fixture.root, "-Users-someone-Projects-demo", "session-abc123", *folders
+        )
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "agent-a1b2c3.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(assistant("sub", output_tokens=9)) + "\n")
+        return path
+
+    def test_subagent_transcripts_belong_to_their_project(self):
+        """Not to a project called "subagents", or after a workflow id."""
+        with TranscriptFixture([assistant("m", output_tokens=5)]) as fixture:
+            direct = self.write_subagent(fixture, "subagents")
+            nested = self.write_subagent(
+                fixture, "subagents", "workflows", "wf_42de590e-9e3"
+            )
+            self.assertEqual(parse_file(direct).project, "demo")
+            self.assertEqual(parse_file(nested).project, "demo")
+
+    def test_project_filter_includes_subagent_transcripts(self):
+        with TranscriptFixture([assistant("m", output_tokens=5)]) as fixture:
+            self.write_subagent(fixture, "subagents")
+            self.assertEqual(len(discover(root=fixture.root, project="demo")), 2)
+            self.assertEqual(len(discover(root=fixture.root, project="subagents")), 0)
+
     def test_project_filter(self):
         with TranscriptFixture([assistant("m", output_tokens=5)]) as fixture:
             self.assertEqual(len(discover(root=fixture.root, project="demo")), 1)

@@ -136,8 +136,9 @@ def render_session(
 
     lines.append(rule)
     header = "  %s" % (report["project"] or "session")
-    if report["date"]:
-        header += "   %s" % report["date"]
+    span = _span(report["date"], report.get("end_date"))
+    if span:
+        header += "   %s" % span
     lines.append(header)
     subtitle = "  %s" % report["session_id"][:8]
     if report["branch"]:
@@ -446,6 +447,17 @@ def render_summary(
     lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
     lines.append("")
     return "\n".join(lines)
+
+
+def _span(start: Optional[str], end: Optional[str]) -> Optional[str]:
+    """The days a session ran, as one date or ``start → end``.
+
+    A session resumed across weeks printed only the day it began, so a receipt
+    for work done this morning was headed with a date a month ago.
+    """
+    if start and end and end != start:
+        return "%s → %s" % (start, end)
+    return start or end
 
 
 def _shorten(text: str, width: int) -> str:
