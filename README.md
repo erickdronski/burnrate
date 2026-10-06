@@ -191,7 +191,7 @@ somebody started. On this machine 376 rollout files held 47 sessions.
   ! Not included in the total — no price on file for: gpt-6-astra
     Supply one with --prices to include it.
 
-  Codex plan usage (promax): 100% of the weekly limit, as of
+  Codex plan usage (pro): 62% of the weekly limit, as of
   2026-10-06 21:34 UTC; resets 2026-10-10 04:26 UTC.
 
   5129 turns · 4818 tool calls
