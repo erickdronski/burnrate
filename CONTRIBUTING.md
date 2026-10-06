@@ -27,14 +27,23 @@ fetch — will be declined regardless of how useful it is.
 
 ## Adding another harness
 
-`burnrate/sessions.py` parses Claude Code's JSONL format. To support another
-agent, add a parser that produces the same `Session` / `Turn` / `Usage` objects
-and register its default transcript location in `DEFAULT_ROOTS`. The pricing,
-receipt, and guard layers are format-agnostic.
+`burnrate/sessions.py` parses Claude Code's JSONL format and `burnrate/codex.py`
+parses Codex rollouts. To support another agent, add a module that produces the
+same `Session` / `Turn` / `Usage` objects (with `Session.agent` set), expose its
+unread sessions as `candidates()` so they sort into the newest-first selection,
+and wire its default location into `_sources()` in `cli.py`. Pricing and
+rendering are format-agnostic; the guard is a Claude Code hook.
 
 Before you start, check that the format actually records per-response token
 usage. Without it, any cost figure is an estimate of an estimate, and this tool
 would rather report nothing than a plausible fiction.
+
+Then measure how it double-counts. Every format so far has: Claude Code writes
+each streamed message several times, and Codex logs most responses twice and
+its running total misses some. Count records on a real machine, document the
+raw sum against the deduplicated one, and pin the rule with a fixture that
+reproduces the sequence. Do not price a model whose rates you have not
+verified; report it as unpriced and let `--prices` fill the gap.
 
 ## Updating prices
 

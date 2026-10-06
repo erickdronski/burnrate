@@ -7,6 +7,7 @@ Local, offline, zero dependencies, no API key.</p>
   <a href="#try-it">Try it</a> ·
   <a href="#the-spend-cap">Spend cap</a> ·
   <a href="#the-bug-in-every-naive-token-counter">Why other counters are wrong</a> ·
+  <a href="#codex">Codex</a> ·
   <a href="#what-it-reports">Reports</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -26,9 +27,10 @@ You start an agent on a task, step away, and come back to a finished feature and
 no idea what it cost. Then at some point you get a bill, and it is one number
 for a month of work you can no longer break down.
 
-`burnrate` reads the session transcripts your agent already writes to disk and
-prints a receipt. Nothing is uploaded, no API key is involved, and it works
-offline — the data is already on your machine.
+`burnrate` reads the session logs your agent already writes to disk — Claude
+Code's transcripts and OpenAI Codex CLI's rollouts — and prints a receipt.
+Nothing is uploaded, no API key is involved, and it works offline — the data is
+already on your machine.
 
 ## Try it
 
@@ -45,7 +47,7 @@ name will be `agent-burnrate`.
 ```
 ────────────────────────────────────────────────────────────────
   nalee   2026-08-14
-  f26ccfad · main
+  f26ccfad · main · Claude Code
 ────────────────────────────────────────────────────────────────
 
                                      TOKENS         COST
@@ -105,6 +107,10 @@ Stopping here. Raise the cap with --cap, or start a fresh session — context
 resets are usually cheaper than continuing a long one anyway.
 ```
 
+The cap is a Claude Code hook, and it reads Claude Code transcripts only.
+Codex sessions get receipts but no cap — there is no hook to install it in, and
+no verified price to cap against.
+
 **It fails open, always.** If the transcript is missing, unreadable, or uses a
 model with no price on file, the guard exits 0 and says why. A cost tool that
 bricks your agent because it couldn't parse a log file deserves to be
@@ -153,6 +159,121 @@ More places the arithmetic is easy to get wrong, and what this does:
   one with `--prices`.
 - **`<synthetic>` records aren't billable** and are dropped.
 
+## Codex
+
+`burnrate` reads OpenAI Codex CLI rollouts too: `~/.codex/sessions`, and
+`~/.codex/archived_sessions`, because archiving a session in the app does not
+un-spend it. With no flags it reads every agent it finds; `--agent codex` or
+`--agent claude` narrows to one.
+
+A Codex *session* is a conversation and every subagent thread it spawned. Each
+thread is written to its own file and tagged with the conversation's
+`session_id`, and the receipt reports the session, because that is what
+somebody started. On this machine 376 rollout files held 47 sessions.
+
+```
+────────────────────────────────────────────────────────────────
+  my-app   2026-09-30 → 2026-10-06
+  0f98003f · Codex · 78 threads
+────────────────────────────────────────────────────────────────
+
+                                     TOKENS         COST
+  gpt-6-astra                        689.9M     unpriced
+
+  input (uncached)                    19.5M
+  input (cache read)                 668.4M
+  output                               2.0M
+
+────────────────────────────────────────────────────────────────
+  TOTAL                                         unpriced
+────────────────────────────────────────────────────────────────
+
+  ! Not included in the total — no price on file for: gpt-6-astra
+    Supply one with --prices to include it.
+
+  Codex plan usage (promax): 100% of the weekly limit, as of
+  2026-10-06 21:34 UTC; resets 2026-10-10 04:26 UTC.
+
+  5129 turns · 4818 tool calls
+```
+
+**Codex logs most responses twice, and its running total leaves some out.**
+Every `token_count` event carries `total_token_usage`, cumulative for the
+thread, and `last_token_usage` for the latest response; CLI 0.15x also writes a
+`token_usage_record` per response, keyed by `response_id`. Measured across all
+of this machine's rollouts:
+
+```
+sum of every token_count's last_token_usage     9,496,451,892
+  plus every token_usage_record                18,284,860,066
+final total_token_usage of each file            8,552,379,463
+burnrate: one usage per response_id             8,788,408,174
+```
+
+- **Counting both sources doubles the bill (2.08×).** Every `token_count` that
+  advanced the total — 60,351 of them — came immediately after the record for
+  the same response, with identical numbers.
+- **Summing `last_token_usage` overcounts by 8%.** 5,827 events re-emit the
+  previous total with no response behind them, and after a compaction the event
+  reports the size of the compacted context as `last`, with no model call.
+- **The final total undercounts by 236M tokens (2.7%).** The 638 compaction
+  calls are in the records but never reach the running total, and a session
+  resumed after a restart starts it again from zero.
+- **Summing `total_token_usage` per event** — reading a cumulative counter as a
+  per-response one — would overstate usage 1,734×.
+
+`burnrate` counts one usage per `response_id`. A `token_count` is used only when
+no record arrived since the previous one — every event, on a CLI old enough not
+to write records — and only when its total actually moved.
+
+Forked subagent threads open with a copy of the parent's history. On CLI
+0.153–0.160 that copy is messages only: all 60,990 records carry their own
+file's thread id, and no response id appears in two files. That is enforced
+rather than trusted — a record with another thread's id is dropped, response
+ids are deduplicated across a session's files, and without records a fork's
+events from before `subagent_history_start_ordinal` are not counted.
+
+**What the counters mean**, checked rather than assumed:
+`reasoning_output_tokens` never exceeds `output_tokens` (66,160 of 66,160
+events), and `total_tokens` is exactly `input_tokens + output_tokens` on every
+event that stands for a model call — so reasoning is part of output and is not
+added again. `cached_input_tokens` never exceeds `input_tokens`: cached input is
+part of input, and uncached input is the difference.
+`cache_write_input_tokens` is zero in every record; if it ever is not, it stays
+in uncached input, which understates rather than inflates.
+
+**No Codex model is priced.** No OpenAI rate in this package has been verified
+by anyone, so Codex models are listed with their tokens and left out of every
+total — the same treatment as any unknown model, for the same reason. Supply
+your rates and they are priced like anything else:
+
+```json
+{ "prices": { "gpt-6-astra": { "input": …, "cached_input": …, "output": … } } }
+```
+
+Each `…` is your rate in US dollars per million tokens. (Left as is, the file is
+rejected — deliberately, since zeros would cost a few billion tokens at
+nothing.)
+
+**Plan usage is the number a subscriber can act on.** Codex logs the plan's own
+meter with every response, and burnrate prints the latest reading. It is the
+reading from when the log was written, not a live query — this package makes no
+network calls — so it says when it was taken and whether the window has rolled
+over since.
+
+Tool calls are counted from `function_call` and `custom_tool_call` items.
+Recent CLIs run most tools from generated JavaScript inside one `exec` call, so
+`exec` leads the tool list; `--verbose` pulls the shell commands out of that
+code (`tools.exec_command({cmd: …})`) and the file names out of patches, and
+every command is redacted at capture, as for Claude Code.
+
+Rollouts run to gigabytes — one session here is 5.6 GB, nearly all of it tool
+output and encrypted reasoning. Each line's type is read from an anchored match
+on its first few dozen bytes, and only the four kinds of record a receipt uses
+are decoded. A line that doesn't match that exact compact prefix is decoded in
+full, so a format change costs speed, not correctness — the same rule as the
+Claude fast path below.
+
 ## What it reports
 
 ```bash
@@ -162,7 +283,8 @@ burnrate --today             # everything from today
 burnrate --project nalee     # one project
 burnrate --top               # the sessions that cost the most
 burnrate --trend             # daily spend, and whether it is rising
-burnrate --summary day       # roll up by day, project, or model
+burnrate --summary day       # roll up by day, project, model, or agent
+burnrate --agent codex       # one agent (default: every agent found)
 burnrate --verbose           # files touched and commands run
 burnrate --format json       # everything, for your own tooling
 ```
@@ -291,12 +413,14 @@ contracts, and platform differences aren't visible from here.
 
 ## Privacy
 
-It reads `~/.claude/projects/**/*.jsonl` and writes nothing. There is no network
+It reads `~/.claude/projects/**/*.jsonl`, `~/.codex/sessions`, and
+`~/.codex/archived_sessions`, and writes nothing. There is no network
 code in this package at all — no telemetry, no update check, no analytics. The
 only way data leaves your machine is if you pipe the JSON somewhere yourself.
 
 **Secrets in captured commands are masked.** `--verbose` and `--format json`
-print the shell commands your agent ran, and agent sessions routinely contain
+print the shell commands your agent ran — Claude Code's `Bash` calls, and the
+commands Codex ran through its shell tools — and agent sessions routinely contain
 `export ANTHROPIC_API_KEY=sk-...` or a `curl` with a bearer token. Since a cost
 report is exactly the kind of file that gets pasted into an issue, every command
 is redacted **at capture** — the raw value never enters the object graph, so no

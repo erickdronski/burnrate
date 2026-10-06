@@ -3,8 +3,9 @@
 burnrate                      # receipt for the most recent session
 burnrate --last 5             # the last five sessions
 burnrate --today              # everything from today
-burnrate --summary day        # roll up by day, project, or model
+burnrate --summary day        # roll up by day, project, model, or agent
 burnrate --project nalee      # filter to one project
+burnrate --agent codex        # one agent's sessions (default: every agent found)
 burnrate guard --cap 5.00     # hook: stop a session at a spend cap
 """
 
@@ -17,7 +18,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence
 
-from . import __version__
+from . import __version__, codex
 from .guard import DEFAULT_WARN_AT, run_guard
 from .pricing import PricingError, load_price_overrides
 from .receipt import (
@@ -27,7 +28,15 @@ from .receipt import (
     render_top,
     render_trend,
 )
-from .sessions import SessionError, discover, parse_file
+from .sessions import (
+    DEFAULT_ROOTS,
+    Candidate,
+    SessionError,
+    candidates,
+    collect,
+    default_root,
+    parse_file,
+)
 
 __all__ = ["main"]
 
@@ -67,13 +76,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--session", metavar="PATH", help="report on one specific transcript file"
     )
     selection.add_argument(
-        "--root", help="transcript directory (default: ~/.claude/projects)"
+        "--agent",
+        choices=("claude", "codex", "all"),
+        help="which agent's sessions to read (default: every agent whose logs "
+        "are present; with --root or --codex-root, only those)",
+    )
+    selection.add_argument(
+        "--root", help="Claude Code transcript directory (default: ~/.claude/projects)"
+    )
+    selection.add_argument(
+        "--codex-root",
+        metavar="DIR",
+        help="Codex rollout directory (default: ~/.codex/sessions and "
+        "~/.codex/archived_sessions)",
     )
 
     output = parser.add_argument_group("output")
     output.add_argument(
         "--summary",
-        choices=("day", "project", "model"),
+        choices=("day", "project", "model", "agent"),
         help="roll up instead of printing individual receipts",
     )
     output.add_argument(
@@ -146,6 +167,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.cap is None:
             sys.stderr.write("guard requires --cap, e.g. --cap 5.00\n")
             return 2
+        if args.agent == "codex":
+            # The guard is a Claude Code hook. Failing open matches every other
+            # condition it cannot evaluate: a misconfigured cap must not stop
+            # anyone's agent.
+            sys.stderr.write(
+                "burnrate: guard supports Claude Code hooks only; not enforcing\n"
+            )
+            return 0
         return run_guard(
             cap=args.cap,
             transcript_path=args.transcript,
@@ -167,8 +196,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if not sessions:
         sys.stderr.write(
-            "No sessions found%s. Point --root at your transcript directory if "
-            "it lives somewhere unusual.\n"
+            "No sessions found%s. Point --root (Claude Code) or --codex-root "
+            "(Codex) at your logs if they live somewhere unusual.\n"
             % (" matching that filter" if (args.project or since) else "")
         )
         return 1
@@ -198,7 +227,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 def _select_sessions(args, since: Optional[str]):
     if args.session:
-        session = parse_file(os.path.expanduser(args.session))
+        path = os.path.expanduser(args.session)
+        if codex.is_rollout(path):
+            session = codex.parse_session([path])
+        else:
+            session = parse_file(path)
         if session is None:
             raise SessionError("no billable usage found in %s" % args.session)
         return [session]
@@ -208,7 +241,14 @@ def _select_sessions(args, since: Optional[str]):
         if (args.all or args.summary or args.top or args.trend or since)
         else args.last
     )
-    sessions = discover(root=args.root, project=args.project, since=since, limit=limit)
+    found: List[Candidate] = []
+    for agent, roots in _sources(args):
+        if agent == "codex":
+            found.extend(codex.candidates(roots, args.project))
+        else:
+            for root in roots:
+                found.extend(candidates(root, args.project))
+    sessions = collect(found, since=since, limit=limit)
     if (
         not args.all
         and not args.summary
@@ -218,6 +258,60 @@ def _select_sessions(args, since: Optional[str]):
     ):
         return sessions[: args.last]
     return sessions
+
+
+def _sources(args) -> List[Any]:
+    """Which agents to read, and the directories to read them from.
+
+    With no ``--agent``, every agent whose logs exist is read — unless a root
+    was named, in which case only the named roots are. Pointing at a
+    directory means "read this", and quietly adding the real home directory
+    to a report about a test fixture would be a surprise.
+    """
+    named = {"claude": args.root, "codex": args.codex_root}
+    # `required`: the user asked for these agents specifically, so a missing
+    # directory is an error rather than an agent that simply isn't installed.
+    if args.agent in ("claude", "codex"):
+        wanted, required = [args.agent], True
+    elif args.agent is None and (args.root or args.codex_root):
+        wanted, required = [agent for agent, root in named.items() if root], True
+    else:
+        wanted, required = ["claude", "codex"], False
+
+    sources: List[Any] = []
+    for agent in wanted:
+        if named[agent]:
+            root = os.path.expanduser(named[agent])
+            if not os.path.isdir(root):
+                raise SessionError("not a directory: %s" % root)
+            sources.append((agent, [root]))
+        elif agent == "codex":
+            roots = codex.default_roots()
+            if roots:
+                sources.append((agent, roots))
+            elif required:
+                raise SessionError(
+                    "no Codex session directory found. Looked for: %s. Pass "
+                    "--codex-root to point at rollouts elsewhere."
+                    % ", ".join(codex.DEFAULT_ROOTS)
+                )
+        else:
+            root = default_root()
+            if root:
+                sources.append((agent, [root]))
+            elif required:
+                raise SessionError(
+                    "no Claude Code session directory found. Looked for: %s. "
+                    "Pass --root to point at transcripts elsewhere."
+                    % ", ".join(DEFAULT_ROOTS)
+                )
+    if not sources:
+        raise SessionError(
+            "no session directory found. Looked for: %s. Pass --root (Claude "
+            "Code) or --codex-root (Codex) to point at logs elsewhere."
+            % ", ".join(DEFAULT_ROOTS + codex.DEFAULT_ROOTS)
+        )
+    return sources
 
 
 def _jsonable(reports: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:

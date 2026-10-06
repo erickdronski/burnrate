@@ -4,7 +4,7 @@ The design goal is the paper receipt: the total at the bottom, the line items
 above it, and nothing you have to decode. A cost tool that requires a legend
 does not get looked at twice.
 
-Three things this prints that most token counters do not:
+Four things this prints that most token counters do not:
 
 * **What caching saved.** Cache reads cost a tenth of base input or less, so a
   long session is usually an order of magnitude cheaper than its token count
@@ -13,10 +13,16 @@ Three things this prints that most token counters do not:
   silently costed at zero.
 * **What the agent actually did.** Tokens are the price; tools called, files
   touched, and commands run are the thing you are paying for.
+* **How much of a subscription is gone.** On a flat-rate plan the dollar figure
+  is notional; where the logs carry the plan's usage window, that is printed
+  too.
 """
 
 from __future__ import annotations
 
+import datetime
+import textwrap
+import time
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .pricing import (
@@ -25,14 +31,17 @@ from .pricing import (
     price_usage,
     uncached_equivalent,
 )
-from .sessions import Session
+from .sessions import AGENT_LABELS, Session
 
 __all__ = [
     "fmt_money",
+    "fmt_plan_usage",
     "model_label",
     "price_session",
     "render_session",
     "render_summary",
+    "render_top",
+    "render_trend",
 ]
 
 
@@ -63,6 +72,39 @@ def model_label(model: Optional[str], fast: bool = False) -> str:
     """How a model is named in a report. Fast mode is its own line item."""
     label = model or "unknown"
     return label + " (fast)" if fast else label
+
+
+def fmt_plan_usage(snapshot: Mapping[str, Any], now: Optional[float] = None) -> str:
+    """One sentence on how much of a subscription window is used.
+
+    The figure is the one the logs carried at ``as_of``, not a live reading,
+    so the sentence says when it was taken and whether the window has rolled
+    over since.
+    """
+    plan = snapshot.get("plan")
+    text = "Codex plan usage%s: %.0f%% of the %s limit" % (
+        " (%s)" % plan if plan else "",
+        snapshot["used_percent"],
+        _window(snapshot.get("window_minutes")),
+    )
+    secondary = snapshot.get("secondary")
+    if secondary:
+        text += " and %.0f%% of the %s limit" % (
+            secondary["used_percent"],
+            _window(secondary.get("window_minutes")),
+        )
+    text += ", as of %s" % _utc(snapshot["as_of"])
+    resets = snapshot.get("resets_at")
+    if resets:
+        current = time.time() if now is None else now
+        if resets <= current:
+            text += "; that window has since reset."
+        else:
+            moment = datetime.datetime.fromtimestamp(resets, datetime.timezone.utc)
+            text += "; resets %s." % moment.strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        text += "."
+    return text
 
 
 def price_session(
@@ -105,7 +147,10 @@ def price_session(
     )
 
     return {
+        "agent": session.agent,
         "session_id": session.session_id,
+        "short_id": session.short_id,
+        "threads": session.threads,
         "project": session.project,
         "date": session.date,
         "end_date": session.end_date,
@@ -121,6 +166,8 @@ def price_session(
         "saved_by_caching": max(0.0, uncached_total - total_cost),
         "cache_hit_rate": cache_hit_rate,
         "unpriced_models": unpriced,
+        "priced": any(entry["cost"] is not None for entry in by_model),
+        "plan_usage": session.plan_usage,
         "top_tools": session.top_tools(),
         "top_files": session.top_files(),
         "commands": session.commands,
@@ -140,9 +187,12 @@ def render_session(
     if span:
         header += "   %s" % span
     lines.append(header)
-    subtitle = "  %s" % report["session_id"][:8]
+    subtitle = "  %s" % (report.get("short_id") or report["session_id"][:8])
     if report["branch"]:
         subtitle += " · %s" % report["branch"]
+    subtitle += " · %s" % _agent_label(report)
+    if report.get("threads", 1) > 1:
+        subtitle += " · %d threads" % report["threads"]
     lines.append(subtitle)
     lines.append(rule)
 
@@ -181,7 +231,9 @@ def render_session(
 
     lines.append("")
     lines.append(rule)
-    lines.append("  %-28s %25s" % ("TOTAL", fmt_money(report["cost"])))
+    lines.append(
+        "  %-28s %25s" % ("TOTAL", _cost_cell(report["cost"], _priced(report)))
+    )
     lines.append(rule)
 
     if report["saved_by_caching"] > 0:
@@ -203,6 +255,10 @@ def render_session(
             % ", ".join(report["unpriced_models"])
         )
         lines.append("    Supply one with --prices to include it.")
+
+    if report.get("plan_usage"):
+        lines.append("")
+        lines.extend(_wrap(fmt_plan_usage(report["plan_usage"]), width))
 
     lines.append("")
     lines.append(
@@ -253,22 +309,35 @@ def render_top(reports, limit: int = 10, width: int = 64) -> str:
     total = sum(r["cost"] for r in reports)
 
     lines = [rule, "  MOST EXPENSIVE SESSIONS", rule, ""]
-    lines.append(
-        "  %-10s %-14s %8s %9s %8s" % ("DATE", "PROJECT", "TURNS", "TOKENS", "COST")
-    )
+    # The agent column appears once anything but Claude Code is in the list,
+    # so a Claude-only report reads exactly as it always has.
+    with_agent = _several_agents(reports)
+    if with_agent:
+        lines.append(
+            "  %-10s %-6s %-12s %6s %9s %9s"
+            % ("DATE", "AGENT", "PROJECT", "TURNS", "TOKENS", "COST")
+        )
+    else:
+        lines.append(
+            "  %-10s %-14s %8s %9s %8s" % ("DATE", "PROJECT", "TURNS", "TOKENS", "COST")
+        )
     for report in ranked:
         share = (report["cost"] / total * 100) if total else 0
-        lines.append(
-            "  %-10s %-14s %8d %9s %8s%s"
-            % (
-                (report["date"] or "—")[:10],
-                (report["project"] or "—")[:14],
-                report["turns"],
-                fmt_tokens(report["usage"].total_tokens),
-                fmt_money(report["cost"]),
-                "  %2.0f%%" % share if share >= 1 else "",
-            )
+        cells = (
+            (report["date"] or "—")[:10],
+            (report["project"] or "—")[: 12 if with_agent else 14],
+            report["turns"],
+            fmt_tokens(report["usage"].total_tokens),
+            _cost_cell(report["cost"], _priced(report)),
+            "  %2.0f%%" % share if share >= 1 else "",
         )
+        if with_agent:
+            lines.append(
+                "  %-10s %-6s %-12s %6d %9s %9s%s"
+                % (cells[0], report.get("agent", "claude")[:6], *cells[1:])
+            )
+        else:
+            lines.append("  %-10s %-14s %8d %9s %8s%s" % cells)
     lines.append("")
     if ranked and total:
         top_share = sum(r["cost"] for r in ranked) / total * 100
@@ -276,6 +345,7 @@ def render_top(reports, limit: int = 10, width: int = 64) -> str:
             "  These %d session(s) are %.0f%% of %s across %d session(s)."
             % (len(ranked), top_share, fmt_money(total), len(reports))
         )
+    lines.extend(_footnotes(reports, width))
     lines.append("")
     lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
     lines.append("")
@@ -290,8 +360,9 @@ def render_trend(reports, width: int = 64) -> str:
     you do in your head.
     """
     rule = "─" * width
-    by_day = {}
+    by_day: Dict[str, Dict[str, Any]] = {}
     spanning = 0
+    with_agent = _several_agents(reports)
     for report in reports:
         # Attribute a session to the day it *finished*, not the day it began.
         # Long sessions get resumed across weeks, and bucketing by start date
@@ -305,10 +376,14 @@ def render_trend(reports, width: int = 64) -> str:
             and report["end_date"] != report["date"]
         ):
             spanning += 1
-        entry = by_day.setdefault(day, {"cost": 0.0, "sessions": 0, "tokens": 0})
+        entry = by_day.setdefault(
+            day, {"cost": 0.0, "sessions": 0, "tokens": 0, "agents": {}}
+        )
         entry["cost"] += report["cost"]
         entry["sessions"] += 1
         entry["tokens"] += report["usage"].total_tokens
+        agent = report.get("agent", "claude")
+        entry["agents"][agent] = entry["agents"].get(agent, 0) + 1
 
     days = sorted(by_day)
     if not days:
@@ -318,13 +393,20 @@ def render_trend(reports, width: int = 64) -> str:
     lines = [rule, "  DAILY BURN", rule, ""]
     for day in days:
         entry = by_day[day]
+        if with_agent:
+            sessions = " · ".join(
+                "%d %s" % (count, agent)
+                for agent, count in sorted(entry["agents"].items())
+            )
+        else:
+            sessions = "%d session(s)" % entry["sessions"]
         lines.append(
-            "  %-10s %9s %-22s %d session(s)"
+            "  %-10s %9s %-22s %s"
             % (
                 day,
                 fmt_money(entry["cost"]),
                 bar(entry["cost"] / peak, 20),
-                entry["sessions"],
+                sessions,
             )
         )
 
@@ -351,6 +433,7 @@ def render_trend(reports, width: int = 64) -> str:
             "  %d session(s) spanned more than one day and are counted on the "
             "day they last ran." % spanning
         )
+    lines.extend(_footnotes(reports, width))
     lines.append("")
     lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
     lines.append("")
@@ -368,7 +451,7 @@ def render_summary(
     group_by: str = "day",
     width: int = 64,
 ) -> str:
-    """Roll several sessions up by day, project, or model."""
+    """Roll several sessions up by day, project, model, or agent."""
     rule = "─" * width
     lines: List[str] = []
 
@@ -378,6 +461,8 @@ def render_summary(
             keys = [report["project"] or "(unknown)"]
         elif group_by == "model":
             keys = [model_label(e["model"], e["fast"]) for e in report["by_model"]]
+        elif group_by == "agent":
+            keys = [_agent_label(report)]
         else:
             keys = [report["date"] or "(undated)"]
 
@@ -390,6 +475,7 @@ def render_summary(
                     "tokens": 0,
                     "sessions": 0,
                     "tool_calls": 0,
+                    "priced": False,
                 },
             )
             if group_by == "model":
@@ -401,7 +487,9 @@ def render_summary(
                 bucket["cost"] += entry["cost"] or 0.0
                 bucket["uncached"] += entry["uncached_cost"] or 0.0
                 bucket["tokens"] += entry["usage"].total_tokens
+                bucket["priced"] = bucket["priced"] or entry["cost"] is not None
             else:
+                bucket["priced"] = bucket["priced"] or _priced(report)
                 bucket["cost"] += report["cost"]
                 bucket["uncached"] += report["uncached_cost"]
                 bucket["tokens"] += report["usage"].total_tokens
@@ -426,7 +514,7 @@ def render_summary(
                 str(key)[:22],
                 bucket["sessions"],
                 fmt_tokens(bucket["tokens"]),
-                fmt_money(bucket["cost"]),
+                _cost_cell(bucket["cost"], bucket["priced"]),
             )
         )
 
@@ -443,10 +531,99 @@ def render_summary(
             % (fmt_money(saved), sum(1 for _ in reports))
         )
 
+    lines.extend(_footnotes(reports, width))
     lines.append("")
     lines.append("  Prices as of %s. Estimate, not an invoice." % PRICES_AS_OF)
     lines.append("")
     return "\n".join(lines)
+
+
+def _agent_label(report: Mapping[str, Any]) -> str:
+    agent = report.get("agent", "claude")
+    return AGENT_LABELS.get(agent, agent)
+
+
+def _several_agents(reports: Sequence[Mapping[str, Any]]) -> bool:
+    return any(report.get("agent", "claude") != "claude" for report in reports)
+
+
+def _priced(report: Mapping[str, Any]) -> bool:
+    """Whether any of a report's usage had a price. Reports built before the
+    field existed were priced or listed their gaps, so default to True."""
+    return report.get("priced", True) or not report.get("unpriced_models")
+
+
+def _cost_cell(cost: float, priced: bool) -> str:
+    """A cost, or "unpriced" where nothing could be priced.
+
+    $0.00 beside a few billion tokens reads as free. It is not; it is unknown.
+    """
+    return fmt_money(cost) if priced else "unpriced"
+
+
+def _footnotes(reports: Sequence[Mapping[str, Any]], width: int) -> List[str]:
+    """What the totals above leave out, and the plan usage, if any.
+
+    Per-session receipts name their unpriced models; a roll-up has to as well,
+    or a gap of several billion tokens disappears into a total that looks
+    complete.
+    """
+    lines: List[str] = []
+    unpriced: Dict[str, int] = {}
+    for report in reports:
+        for entry in report["by_model"]:
+            if entry["cost"] is None:
+                label = model_label(entry["model"], entry["fast"])
+                unpriced[label] = unpriced.get(label, 0) + entry["usage"].total_tokens
+    if unpriced:
+        names = ", ".join(
+            "%s (%s tokens)" % (name, fmt_tokens(tokens))
+            for name, tokens in sorted(unpriced.items(), key=lambda item: -item[1])
+        )
+        lines.append("")
+        lines.extend(
+            _wrap(
+                "! Not in these totals — no price on file for %s. Supply prices "
+                "with --prices to include them." % names,
+                width,
+                hang="    ",
+            )
+        )
+    snapshots = [r["plan_usage"] for r in reports if r.get("plan_usage")]
+    if snapshots:
+        lines.append("")
+        latest = max(snapshots, key=lambda snapshot: snapshot["as_of"])
+        lines.extend(_wrap(fmt_plan_usage(latest), width))
+    return lines
+
+
+def _wrap(text: str, width: int, hang: str = "  ") -> List[str]:
+    return textwrap.wrap(
+        text,
+        width=width - 2,
+        initial_indent="  ",
+        subsequent_indent=hang,
+        break_on_hyphens=False,
+    )
+
+
+def _window(minutes: Optional[int]) -> str:
+    if minutes == 10080:
+        return "weekly"
+    if minutes == 1440:
+        return "daily"
+    if minutes and minutes % 60 == 0:
+        return "%d-hour" % (minutes // 60)
+    if minutes:
+        return "%d-minute" % minutes
+    return "current"
+
+
+def _utc(timestamp: str) -> str:
+    """``2026-10-06T21:07:32.376Z`` as ``2026-10-06 21:07 UTC``."""
+    if len(timestamp) >= 16 and timestamp[10] == "T":
+        return "%s %s UTC" % (timestamp[:10], timestamp[11:16])
+    return timestamp
 
 
 def _span(start: Optional[str], end: Optional[str]) -> Optional[str]:

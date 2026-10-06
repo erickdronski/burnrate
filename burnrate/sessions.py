@@ -22,21 +22,30 @@ Everything here is read-only. Nothing is uploaded, and no network call is made.
 
 from __future__ import annotations
 
+import datetime
+import functools
 import json
 import os
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .pricing import NON_BILLABLE_MODELS, Usage
 from .redact import redact
 
 __all__ = [
+    "AGENT_LABELS",
+    "Candidate",
     "Session",
     "SessionError",
     "Turn",
+    "candidates",
+    "collect",
     "default_root",
     "discover",
     "parse_file",
 ]
+
+#: How each supported agent is named in a report.
+AGENT_LABELS = {"claude": "Claude Code", "codex": "Codex"}
 
 
 class SessionError(RuntimeError):
@@ -78,12 +87,23 @@ class Turn:
 
 
 class Session:
-    """One transcript: its turns, the tools it called, and what it touched."""
+    """One session: its turns, the tools it called, and what it touched.
 
-    def __init__(self, path: str, session_id: str, project: str) -> None:
+    For Claude Code that is one transcript. For Codex it is a conversation's
+    root thread and every subagent thread it spawned (see ``burnrate.codex``).
+    """
+
+    def __init__(
+        self, path: str, session_id: str, project: str, agent: str = "claude"
+    ) -> None:
         self.path = path
         self.session_id = session_id
         self.project = project
+        self.agent = agent
+        #: Transcript files this session was assembled from.
+        self.threads: int = 1
+        #: The latest subscription-usage snapshot the logs carried, if any.
+        self.plan_usage: Optional[Dict[str, Any]] = None
         self.turns: List[Turn] = []
         self.tool_counts: Dict[str, int] = {}
         self.commands: List[str] = []
@@ -123,6 +143,16 @@ class Session:
         for turn in self.turns:
             total.add(turn.usage)
         return total
+
+    @property
+    def short_id(self) -> str:
+        """A few characters that tell sessions apart in a listing.
+
+        Codex ids are UUIDv7, whose leading characters are a timestamp, so
+        threads started in the same minute share a prefix; the random tail is
+        what distinguishes them.
+        """
+        return self.session_id[-8:] if self.agent == "codex" else self.session_id[:8]
 
     @property
     def turn_count(self) -> int:
@@ -362,13 +392,78 @@ def _extract_usage(raw: object) -> Optional[Usage]:
     return usage
 
 
+#: A session found on disk but not yet read: (last modified, a stable
+#: tie-break, and the call that parses it). Discovery for every agent produces
+#: these, so sessions from different agents can be ordered newest first and
+#: parsed only until enough have been found.
+Candidate = Tuple[float, str, Callable[[], Optional["Session"]]]
+
+
+def candidates(root: str, project: Optional[str] = None) -> List[Candidate]:
+    """Every Claude Code transcript under ``root``, unread."""
+    found: List[Candidate] = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            if not filename.endswith(".jsonl"):
+                continue
+            full = os.path.join(dirpath, filename)
+            if (
+                project
+                and project.lower() not in _unslug(_project_folder(full)).lower()
+            ):
+                continue
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            found.append((mtime, full, functools.partial(parse_file, full)))
+    return found
+
+
+def collect(
+    found: Sequence[Candidate],
+    since: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[Session]:
+    """Parse candidates newest first, stopping once ``limit`` sessions exist.
+
+    A file last written more than a day before ``since`` cannot hold activity
+    on or after it, so it is skipped unread. The day of slack covers the gap
+    between local file times and the UTC timestamps inside the logs; without
+    the check, ``--today`` parsed every transcript ever written to keep the
+    few from today.
+    """
+    cutoff = None
+    if since:
+        try:
+            day = datetime.datetime.strptime(since, "%Y-%m-%d")
+        except ValueError:
+            day = None
+        if day is not None:
+            cutoff = day.replace(tzinfo=datetime.timezone.utc).timestamp() - 86400
+
+    sessions: List[Session] = []
+    for mtime, _key, load in sorted(found, key=lambda c: (c[0], c[1]), reverse=True):
+        if cutoff is not None and mtime < cutoff:
+            break
+        session = load()
+        if session is None:
+            continue
+        if since and session.last_timestamp and session.last_timestamp[:10] < since:
+            continue
+        sessions.append(session)
+        if limit and len(sessions) >= limit:
+            break
+    return sessions
+
+
 def discover(
     root: Optional[str] = None,
     project: Optional[str] = None,
     since: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> List[Session]:
-    """Find and parse session transcripts, newest first.
+    """Find and parse Claude Code transcripts, newest first.
 
     ``since`` is an ISO date (``2026-08-01``); sessions whose last activity
     predates it are skipped. ``project`` matches the project directory name as
@@ -383,37 +478,7 @@ def discover(
     base = os.path.expanduser(base)
     if not os.path.isdir(base):
         raise SessionError("not a directory: %s" % base)
-
-    paths: List[Tuple[float, str]] = []
-    for dirpath, _dirnames, filenames in os.walk(base):
-        for filename in filenames:
-            if not filename.endswith(".jsonl"):
-                continue
-            full = os.path.join(dirpath, filename)
-            if (
-                project
-                and project.lower() not in _unslug(_project_folder(full)).lower()
-            ):
-                continue
-            try:
-                mtime = os.path.getmtime(full)
-            except OSError:
-                continue
-            paths.append((mtime, full))
-
-    paths.sort(reverse=True)
-
-    sessions: List[Session] = []
-    for _mtime, full in paths:
-        session = parse_file(full)
-        if session is None:
-            continue
-        if since and session.last_timestamp and session.last_timestamp[:10] < since:
-            continue
-        sessions.append(session)
-        if limit and len(sessions) >= limit:
-            break
-    return sessions
+    return collect(candidates(base, project), since, limit)
 
 
 def _project_folder(path: str) -> str:

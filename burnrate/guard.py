@@ -8,6 +8,10 @@ for two hours while nobody is watching.
 transcript, prices it, and exits non-zero once the session crosses a cap you
 set. The harness surfaces the message and stops.
 
+It is Claude Code only. Reports cover Codex too, but a cap needs a hook that
+runs before each tool call and a price for the model, and burnrate has neither
+for Codex; ``guard --agent codex`` says so and exits 0.
+
 Install it into ``~/.claude/settings.json``::
 
     {
