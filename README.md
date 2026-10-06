@@ -72,8 +72,8 @@ name will be `agent-burnrate`.
 ```
 
 That caching line is usually the surprise. A long agentic session re-reads its
-whole context every turn, and cache reads cost a tenth of base input — so the
-token count looks alarming and the bill mostly isn't.
+whole context every turn, and cache reads cost a tenth of base input or less —
+so the token count looks alarming and the bill mostly isn't.
 
 ## The spend cap
 
@@ -130,12 +130,24 @@ highest `output_tokens` (streaming writes a growing count, so the largest is the
 complete one). If a tool tells you your sessions cost 2–3× what your invoice
 says, this is why.
 
-Three more places the arithmetic is easy to get wrong, and what this does:
+More places the arithmetic is easy to get wrong, and what this does:
 
+- **Cache reads are priced per model.** Fable 5.1 reads the cache at 0.025×
+  base input, Opus 5.5 at 0.05×, everything else at 0.1×. On this machine 96%
+  of all input tokens are cache reads, so this one rate decides the bill:
+  reading Fable 5.1's cache at the usual tenth overstated its spend by 47%.
 - **Cache writes have two prices.** A 5-minute cache write costs 1.25× base
   input; a 1-hour write costs 2×. The logs record them separately; tools that
   apply a single multiplier are wrong for whichever TTL they didn't pick, and on
   long sessions the 1-hour writes dominate.
+- **A new point release is not its predecessor.** `claude-opus-5-5` starts with
+  `claude-opus-5`, and a prefix lookup prices it at the older model's rates —
+  which overstated Opus 5.5 by 79% here. Model names are matched exactly, after
+  stripping a date (`-20250929`) or deployment suffix (`[1m]`, `@20251101`).
+  A release the table doesn't know is reported as unpriced, not guessed at.
+- **Fast mode is priced per turn.** It is a per-request setting, so one session
+  can mix fast and standard turns on the same model. Pricing the whole model
+  fast because four turns were billed a 2,129-turn session $804 too high.
 - **Unknown models are never costed at zero.** They're named in the output and
   excluded from the total, so a gap looks like a gap instead of a discount. Add
   one with `--prices`.
@@ -237,19 +249,45 @@ choice makes that untrue.
 
 The table is dated, and the date prints on every report, because a cost figure
 that doesn't say when its prices were current is a number with a hidden expiry.
-Override or extend it:
+Current as of **2026-09-25**, in US dollars per million tokens:
+
+| Model | Input | Output | Cache read |
+|---|---:|---:|---:|
+| `claude-fable-5-1`, `claude-mythos-5-1` | $10 | $50 | $0.25 |
+| `claude-fable-5`, `claude-mythos-5` | $10 | $50 | $1.00 |
+| `claude-opus-5-5` | $4 | $20 | $0.20 |
+| `claude-opus-5`, `claude-opus-4-8`/`4-7`/`4-6`/`4-5` | $5 | $25 | $0.50 |
+| `claude-sonnet-5-5`, `claude-sonnet-5` | $2 | $10 | $0.20 |
+| `claude-sonnet-4-6`, `claude-sonnet-4-5` | $3 | $15 | $0.30 |
+| `claude-haiku-4-5` | $1 | $5 | $0.10 |
+| fast mode: `claude-opus-5-5` | $8 | $40 | $0.40* |
+| fast mode: `claude-opus-5`, `claude-opus-4-8` | $10 | $50 | $1.00 |
+
+Cache writes are 1.25× base input for the 5-minute TTL and 2× for the 1-hour
+TTL on every model, fast mode included. \*The published rates give no fast-mode
+cache-read price for Opus 5.5; burnrate applies the model's 0.05× read ratio to
+the fast input rate and says so here rather than presenting $0.40 as quoted. A
+fast turn on a model with no fast price (Opus 4.7's fast mode has been removed)
+is reported as unpriced.
+
+Override or extend the table:
 
 ```json
-{ "prices": { "my-self-hosted-model": { "input": 0.5, "output": 1.5 } } }
+{ "prices": {
+    "my-self-hosted-model": { "input": 0.5, "output": 1.5 },
+    "claude-opus-5-5": { "input": 3.2, "output": 16, "cache_read": 0.16 }
+} }
 ```
 
 ```bash
 burnrate --prices prices.json
 ```
 
-Rates are US dollars per million tokens. Everything this prints is an estimate
-from your local logs, not an invoice — discounts, contracts, and platform
-differences aren't visible from here.
+`cache_read` is optional (`cached_input` is accepted too) and defaults to a
+tenth of `input`, which is what every override meant before cache reads were
+priced per model. Rates are US dollars per million tokens. Everything this
+prints is an estimate from your local logs, not an invoice — discounts,
+contracts, and platform differences aren't visible from here.
 
 ## Privacy
 

@@ -14,7 +14,9 @@ from burnrate.pricing import (
     CACHE_READ_MULTIPLIER,
     CACHE_WRITE_1H_MULTIPLIER,
     CACHE_WRITE_5M_MULTIPLIER,
+    FAST_MODE_PRICES,
     PRICES,
+    PRICES_AS_OF,
     PricingError,
     Usage,
     load_price_overrides,
@@ -55,9 +57,41 @@ class TestResolveModel(unittest.TestCase):
     def test_dated_snapshot_resolves_to_base(self):
         self.assertEqual(resolve_model("claude-haiku-4-5-20251001"), "claude-haiku-4-5")
 
-    def test_longest_prefix_wins(self):
-        # "claude-opus-4-8" must not resolve via a shorter "claude-opus-4" key.
+    def test_dated_sonnet_snapshot(self):
+        self.assertEqual(
+            resolve_model("claude-sonnet-4-5-20250929"), "claude-sonnet-4-5"
+        )
+
+    def test_point_releases_resolve_to_themselves(self):
+        """The bug this replaced: prefix matching priced Opus 5.5 as Opus 5.
+
+        With no `claude-opus-5-5` entry, a longest-prefix lookup returned
+        `claude-opus-5`, because the newer name starts with the older one, and
+        every Opus 5.5 turn was billed at the older model's rates.
+        """
+        self.assertEqual(resolve_model("claude-opus-5-5"), "claude-opus-5-5")
+        self.assertEqual(resolve_model("claude-fable-5-1"), "claude-fable-5-1")
+        self.assertEqual(resolve_model("claude-sonnet-5-5"), "claude-sonnet-5-5")
         self.assertEqual(resolve_model("claude-opus-4-8"), "claude-opus-4-8")
+
+    def test_unknown_point_release_is_not_priced_as_its_predecessor(self):
+        self.assertIsNone(resolve_model("claude-opus-5-7"))
+        self.assertIsNone(resolve_model("claude-fable-5-2-20270101"))
+
+    def test_prefix_of_a_known_name_is_not_a_match(self):
+        self.assertIsNone(resolve_model("claude-opus-5-5-preview"))
+
+    def test_deployment_suffixes_are_stripped(self):
+        self.assertEqual(resolve_model("claude-opus-4-6[1m]"), "claude-opus-4-6")
+        self.assertEqual(resolve_model("claude-opus-4-5@20251101"), "claude-opus-4-5")
+        self.assertEqual(
+            resolve_model("claude-opus-5-5-20260401[1m]"), "claude-opus-5-5"
+        )
+
+    def test_override_names_resolve_exactly(self):
+        table = {"gpt-6-astra": {"input": 1, "output": 2}}
+        self.assertEqual(resolve_model("gpt-6-astra", table), "gpt-6-astra")
+        self.assertIsNone(resolve_model("gpt-6", table))
 
     def test_unknown_returns_none_rather_than_guessing(self):
         self.assertIsNone(resolve_model("some-other-vendor-model"))
@@ -77,11 +111,66 @@ class TestPriceUsage(unittest.TestCase):
         usage = Usage(input_tokens=1_000_000, output_tokens=100_000)
         self.assertAlmostEqual(price_usage(usage, "claude-opus-5"), 7.50, places=6)
 
-    def test_cache_read_is_a_tenth_of_input(self):
+    def test_cache_read_is_priced_per_model(self):
+        """The rate that dominates a long session's bill, from the published
+        table: 1M cache-read tokens cost exactly the per-model read rate."""
         usage = Usage(cache_read_tokens=1_000_000)
-        self.assertAlmostEqual(
-            price_usage(usage, "claude-opus-5"), 5.0 * CACHE_READ_MULTIPLIER, places=6
+        expected = {
+            "claude-fable-5-1": 0.25,  # 0.025x of $10
+            "claude-mythos-5-1": 0.25,
+            "claude-fable-5": 1.00,  # 0.1x of $10
+            "claude-opus-5-5": 0.20,  # 0.05x of $4
+            "claude-opus-5": 0.50,  # 0.1x of $5
+            "claude-opus-4-8": 0.50,
+            "claude-sonnet-5-5": 0.20,  # 0.1x of $2
+            "claude-sonnet-5": 0.20,
+            "claude-sonnet-4-6": 0.30,
+            "claude-haiku-4-5": 0.10,
+        }
+        for model, dollars in expected.items():
+            with self.subTest(model=model):
+                self.assertAlmostEqual(price_usage(usage, model), dollars, places=9)
+
+    def test_opus_5_5_is_cheaper_than_opus_5_on_every_axis(self):
+        # $4/$20 against $5/$25, and cache reads at $0.20 against $0.50.
+        for usage, new, old in (
+            (Usage(input_tokens=1_000_000), 4.0, 5.0),
+            (Usage(output_tokens=1_000_000), 20.0, 25.0),
+            (Usage(cache_read_tokens=1_000_000), 0.20, 0.50),
+        ):
+            self.assertAlmostEqual(price_usage(usage, "claude-opus-5-5"), new)
+            self.assertAlmostEqual(price_usage(usage, "claude-opus-5"), old)
+
+    def test_sonnet_5_is_two_and_ten(self):
+        usage = Usage(input_tokens=1_000_000, output_tokens=1_000_000)
+        self.assertAlmostEqual(price_usage(usage, "claude-sonnet-5"), 12.0, places=9)
+        self.assertAlmostEqual(price_usage(usage, "claude-sonnet-5-5"), 12.0)
+        self.assertAlmostEqual(price_usage(usage, "claude-sonnet-4-6"), 18.0)
+
+    def test_a_realistic_turn_on_opus_5_5(self):
+        # 1,000 uncached in at $4        = $0.004
+        # 1M cache read at $0.20         = $0.200
+        # 10k 5-minute writes at $5.00   = $0.050  (1.25 x $4)
+        # 20k 1-hour writes at $8.00     = $0.160  (2 x $4)
+        # 5k output at $20               = $0.100
+        usage = Usage(
+            input_tokens=1_000,
+            output_tokens=5_000,
+            cache_read_tokens=1_000_000,
+            cache_write_5m_tokens=10_000,
+            cache_write_1h_tokens=20_000,
         )
+        self.assertAlmostEqual(price_usage(usage, "claude-opus-5-5"), 0.514, places=9)
+
+    def test_a_realistic_turn_on_fable_5_1(self):
+        # 2M cache read at $0.25 = $0.50; 100k 1-hour writes at $20 = $2.00;
+        # 10k output at $50 = $0.50. Total $3.00.
+        usage = Usage(
+            output_tokens=10_000,
+            cache_read_tokens=2_000_000,
+            cache_write_1h_tokens=100_000,
+        )
+        self.assertAlmostEqual(price_usage(usage, "claude-fable-5-1"), 3.0, places=9)
 
     def test_five_minute_cache_write_is_1_25x(self):
         usage = Usage(cache_write_5m_tokens=1_000_000)
@@ -124,6 +213,38 @@ class TestPriceUsage(unittest.TestCase):
         self.assertAlmostEqual(standard, 25.0, places=6)
         self.assertAlmostEqual(fast, 50.0, places=6)
 
+    def test_opus_5_5_fast_mode(self):
+        # $8 / $40. The cache-read rate is not published; it is the model's
+        # 0.05x ratio applied to the fast input rate: $0.40.
+        self.assertAlmostEqual(
+            price_usage(Usage(input_tokens=1_000_000), "claude-opus-5-5", None, True),
+            8.0,
+        )
+        self.assertAlmostEqual(
+            price_usage(Usage(output_tokens=1_000_000), "claude-opus-5-5", None, True),
+            40.0,
+        )
+        self.assertAlmostEqual(
+            price_usage(
+                Usage(cache_read_tokens=1_000_000), "claude-opus-5-5", None, True
+            ),
+            0.40,
+        )
+        # Cache writes scale from the fast input rate: 1M 1-hour = 2 x $8.
+        self.assertAlmostEqual(
+            price_usage(
+                Usage(cache_write_1h_tokens=1_000_000), "claude-opus-5-5", None, True
+            ),
+            16.0,
+        )
+
+    def test_fast_turn_on_a_model_without_fast_pricing_is_unpriced(self):
+        """Opus 4.7 fast mode was removed. A fast turn there is a gap, not a
+        standard-rate turn."""
+        usage = Usage(output_tokens=1_000)
+        self.assertIsNone(price_usage(usage, "claude-opus-4-7", fast_mode=True))
+        self.assertNotIn("claude-opus-4-7", FAST_MODE_PRICES)
+
     def test_model_tiers_are_ordered_as_published(self):
         usage = Usage(input_tokens=1_000_000, output_tokens=1_000_000)
         haiku = price_usage(usage, "claude-haiku-4-5")
@@ -138,6 +259,34 @@ class TestPriceUsage(unittest.TestCase):
         usage = Usage(output_tokens=1_000_000)
         result = price_usage(
             usage, "claude-opus-5", prices={"claude-opus-5": {"input": 1, "output": 2}}
+        )
+        self.assertAlmostEqual(result, 2.0, places=6)
+
+    def test_override_without_cache_read_reads_at_a_tenth(self):
+        """Backwards compatible: an entry without `cache_read` behaves as
+        every entry did before cache reads were priced per model."""
+        usage = Usage(cache_read_tokens=1_000_000)
+        result = price_usage(
+            usage, "my-model", prices={"my-model": {"input": 3, "output": 15}}
+        )
+        self.assertAlmostEqual(result, 3.0 * CACHE_READ_MULTIPLIER, places=9)
+
+    def test_override_cache_read_is_used(self):
+        usage = Usage(cache_read_tokens=1_000_000, input_tokens=1_000_000)
+        result = price_usage(
+            usage,
+            "my-model",
+            prices={"my-model": {"input": 3, "output": 15, "cache_read": 0.075}},
+        )
+        self.assertAlmostEqual(result, 3.075, places=9)
+
+    def test_override_applies_to_fast_turns_too(self):
+        usage = Usage(output_tokens=1_000_000)
+        result = price_usage(
+            usage,
+            "claude-opus-5",
+            prices={"claude-opus-5": {"input": 1, "output": 2}},
+            fast_mode=True,
         )
         self.assertAlmostEqual(result, 2.0, places=6)
 
@@ -161,6 +310,14 @@ class TestUncachedEquivalent(unittest.TestCase):
         counterfactual = uncached_equivalent(usage, "claude-opus-5")
         self.assertAlmostEqual(counterfactual, 5.0, places=6)
         self.assertAlmostEqual(real, 0.5, places=6)
+
+    def test_fast_counterfactual_uses_the_fast_rate(self):
+        # Otherwise a fast session's "without caching" figure can come out
+        # below what it actually cost.
+        usage = Usage(cache_read_tokens=1_000_000)
+        self.assertAlmostEqual(
+            uncached_equivalent(usage, "claude-opus-5-5", fast_mode=True), 8.0
+        )
 
     def test_caching_never_appears_to_cost_more(self):
         usage = Usage(
@@ -215,6 +372,23 @@ class TestPriceOverrides(unittest.TestCase):
         with self.assertRaises(PricingError):
             load_price_overrides(path)
 
+    def test_optional_cache_read(self):
+        path = self.write({"m": {"input": 1, "output": 2, "cache_read": 0.05}})
+        self.assertEqual(
+            load_price_overrides(path),
+            {"m": {"input": 1.0, "output": 2.0, "cache_read": 0.05}},
+        )
+
+    def test_cached_input_is_a_synonym_for_cache_read(self):
+        """OpenAI's price sheets call it "cached input"."""
+        path = self.write({"gpt-x": {"input": 1, "cached_input": 0.1, "output": 8}})
+        self.assertEqual(load_price_overrides(path)["gpt-x"]["cache_read"], 0.1)
+
+    def test_non_numeric_cache_read_is_rejected(self):
+        path = self.write({"m": {"input": 1, "output": 2, "cache_read": "cheap"}})
+        with self.assertRaises(PricingError):
+            load_price_overrides(path)
+
 
 class TestPriceTableIntegrity(unittest.TestCase):
     def test_every_entry_has_both_rates(self):
@@ -229,6 +403,34 @@ class TestPriceTableIntegrity(unittest.TestCase):
         for model, rate in PRICES.items():
             with self.subTest(model=model):
                 self.assertGreater(rate["output"], rate["input"])
+
+    def test_every_entry_states_its_cache_read_rate(self):
+        """A default would quietly apply 0.1x to a model that reads at 0.025x."""
+        for table in (PRICES, FAST_MODE_PRICES):
+            for model, rate in table.items():
+                with self.subTest(model=model):
+                    self.assertIn("cache_read", rate)
+                    self.assertGreater(rate["cache_read"], 0)
+                    self.assertLess(rate["cache_read"], rate["input"])
+
+    def test_cache_read_ratios_match_the_published_ratios(self):
+        ratios = {
+            "claude-fable-5-1": 0.025,
+            "claude-mythos-5-1": 0.025,
+            "claude-opus-5-5": 0.05,
+            "claude-fable-5": 0.1,
+            "claude-opus-5": 0.1,
+            "claude-sonnet-5-5": 0.1,
+            "claude-sonnet-5": 0.1,
+            "claude-haiku-4-5": 0.1,
+        }
+        for model, ratio in ratios.items():
+            with self.subTest(model=model):
+                rate = PRICES[model]
+                self.assertAlmostEqual(rate["cache_read"] / rate["input"], ratio)
+
+    def test_the_table_is_dated(self):
+        self.assertEqual(PRICES_AS_OF, "2026-09-25")
 
 
 if __name__ == "__main__":

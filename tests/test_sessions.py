@@ -324,6 +324,14 @@ class TestGuard(unittest.TestCase):
             session = parse_file(fixture.path)
         self.assertAlmostEqual(session_cost(session), 25.0, places=6)
 
+    def test_session_cost_prices_fast_turns_individually(self):
+        fast = assistant("m2", output_tokens=1_000)
+        fast["message"]["usage"]["speed"] = "fast"
+        with TranscriptFixture([*self.expensive(), fast]) as fixture:
+            session = parse_file(fixture.path)
+        # $25 standard + 1,000 fast output at $50/M ($0.05).
+        self.assertAlmostEqual(session_cost(session), 25.05, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

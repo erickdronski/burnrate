@@ -94,9 +94,8 @@ def session_cost(
     """Total priced cost of a session, or ``None`` if nothing could be priced."""
     total = 0.0
     priced_any = False
-    fast_models = {t.model for t in session.turns if t.fast and t.model}
-    for model, usage in session.usage_by_model().items():
-        cost = price_usage(usage, model, prices, fast_mode=model in fast_models)
+    for (model, fast), usage in session.usage_by_rate().items():
+        cost = price_usage(usage, model, prices, fast_mode=fast)
         if cost is not None:
             total += cost
             priced_any = True

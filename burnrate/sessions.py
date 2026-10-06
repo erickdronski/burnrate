@@ -104,6 +104,20 @@ class Session:
             out.setdefault(key, Usage()).add(turn.usage)
         return out
 
+    def usage_by_rate(self) -> Dict[Tuple[str, bool], Usage]:
+        """Usage keyed by (model, fast mode) — the unit a price applies to.
+
+        Fast mode is a per-request choice, so one session can mix fast and
+        standard turns on the same model. Keying on the model alone and pricing
+        it fast if *any* turn was fast billed a 2,129-turn session at double
+        rate for four fast turns, overstating it by roughly $800.
+        """
+        out: Dict[Tuple[str, bool], Usage] = {}
+        for turn in self.turns:
+            key = (turn.model or "unknown", bool(turn.fast))
+            out.setdefault(key, Usage()).add(turn.usage)
+        return out
+
     def total_usage(self) -> Usage:
         total = Usage()
         for turn in self.turns:

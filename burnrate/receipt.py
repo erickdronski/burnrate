@@ -6,8 +6,8 @@ does not get looked at twice.
 
 Three things this prints that most token counters do not:
 
-* **What caching saved.** Cache reads cost a tenth of base input, so a long
-  session is usually an order of magnitude cheaper than its token count
+* **What caching saved.** Cache reads cost a tenth of base input or less, so a
+  long session is usually an order of magnitude cheaper than its token count
   suggests. Showing the counterfactual is the most useful line in the report.
 * **What it could not price.** Unknown models are named and excluded, never
   silently costed at zero.
@@ -27,7 +27,13 @@ from .pricing import (
 )
 from .sessions import Session
 
-__all__ = ["fmt_money", "price_session", "render_session", "render_summary"]
+__all__ = [
+    "fmt_money",
+    "model_label",
+    "price_session",
+    "render_session",
+    "render_summary",
+]
 
 
 def fmt_money(amount: Optional[float]) -> str:
@@ -53,6 +59,12 @@ def fmt_tokens(count: Optional[int]) -> str:
     return "{:,}".format(count)
 
 
+def model_label(model: Optional[str], fast: bool = False) -> str:
+    """How a model is named in a report. Fast mode is its own line item."""
+    label = model or "unknown"
+    return label + " (fast)" if fast else label
+
+
 def price_session(
     session: Session, prices: Optional[Mapping[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -63,15 +75,13 @@ def price_session(
     unpriced: List[str] = []
     priced_usage = Usage()
 
-    fast_models = {t.model for t in session.turns if t.fast and t.model}
-
-    for model, usage in sorted(
-        session.usage_by_model().items(), key=lambda item: -item[1].total_tokens
+    for (model, fast), usage in sorted(
+        session.usage_by_rate().items(), key=lambda item: -item[1].total_tokens
     ):
-        cost = price_usage(usage, model, prices, fast_mode=model in fast_models)
-        counterfactual = uncached_equivalent(usage, model, prices)
+        cost = price_usage(usage, model, prices, fast_mode=fast)
+        counterfactual = uncached_equivalent(usage, model, prices, fast_mode=fast)
         if cost is None:
-            unpriced.append(model)
+            unpriced.append(model_label(model, fast))
         else:
             total_cost += cost
             priced_usage.add(usage)
@@ -83,7 +93,7 @@ def price_session(
                 "usage": usage,
                 "cost": cost,
                 "uncached_cost": counterfactual,
-                "fast": model in fast_models,
+                "fast": fast,
             }
         )
 
@@ -141,9 +151,7 @@ def render_session(
 
     for entry in report["by_model"]:
         model_usage: Usage = entry["usage"]
-        label = entry["model"] or "unknown"
-        if entry["fast"]:
-            label += " (fast)"
+        label = model_label(entry["model"], entry["fast"])
         lines.append(
             "  %-28s %12s %12s"
             % (
@@ -368,7 +376,7 @@ def render_summary(
         if group_by == "project":
             keys = [report["project"] or "(unknown)"]
         elif group_by == "model":
-            keys = [entry["model"] or "unknown" for entry in report["by_model"]]
+            keys = [model_label(e["model"], e["fast"]) for e in report["by_model"]]
         else:
             keys = [report["date"] or "(undated)"]
 
@@ -385,7 +393,9 @@ def render_summary(
             )
             if group_by == "model":
                 entry = next(
-                    e for e in report["by_model"] if (e["model"] or "unknown") == key
+                    e
+                    for e in report["by_model"]
+                    if model_label(e["model"], e["fast"]) == key
                 )
                 bucket["cost"] += entry["cost"] or 0.0
                 bucket["uncached"] += entry["uncached_cost"] or 0.0

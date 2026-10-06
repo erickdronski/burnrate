@@ -74,6 +74,31 @@ class TestPriceSession(unittest.TestCase):
         report = price_session(self.session())
         self.assertEqual(report["top_tools"], [("Bash", 1)])
 
+    def test_fast_and_standard_turns_are_priced_separately(self):
+        """Fast mode is per request. One fast turn must not reprice the rest.
+
+        Standard: 1M output on Opus 5 = $25.00. Fast: 1,000 output at $50/M =
+        $0.05. Pricing the whole model fast because one turn was would report
+        $50.05.
+        """
+        fast = assistant("m2", output_tokens=1_000)
+        fast["message"]["usage"]["speed"] = "fast"
+        records = [assistant("m1", output_tokens=1_000_000), fast]
+        with TranscriptFixture(records) as fixture:
+            report = price_session(parse_file(fixture.path))
+        self.assertAlmostEqual(report["cost"], 25.05, places=6)
+        labels = {(e["model"], e["fast"]): e["cost"] for e in report["by_model"]}
+        self.assertAlmostEqual(labels[("claude-opus-5", False)], 25.0, places=6)
+        self.assertAlmostEqual(labels[("claude-opus-5", True)], 0.05, places=6)
+
+    def test_point_release_is_priced_at_its_own_rate(self):
+        """Opus 5.5 at $20/M output, not Opus 5's $25: 1M output = $20.00."""
+        records = [assistant("m", model="claude-opus-5-5", output_tokens=1_000_000)]
+        with TranscriptFixture(records) as fixture:
+            report = price_session(parse_file(fixture.path))
+        self.assertAlmostEqual(report["cost"], 20.0, places=6)
+        self.assertEqual(report["unpriced_models"], [])
+
 
 class TestRenderSummary(unittest.TestCase):
     def test_groups_and_totals(self):
@@ -91,6 +116,17 @@ class TestRenderSummary(unittest.TestCase):
             report = price_session(parse_file(fixture.path))
         text = render_summary([report], group_by="model")
         self.assertIn("claude-opus-5", text)
+
+    def test_group_by_model_keeps_fast_turns_on_their_own_line(self):
+        fast = assistant("m2", output_tokens=1_000_000)
+        fast["message"]["usage"]["speed"] = "fast"
+        records = [assistant("m1", output_tokens=1_000_000), fast]
+        with TranscriptFixture(records) as fixture:
+            report = price_session(parse_file(fixture.path))
+        text = render_summary([report], group_by="model")
+        self.assertIn("claude-opus-5 (fast)", text)
+        self.assertIn("$50.00", text)  # the fast line
+        self.assertIn("$75.00", text)  # the total: $25 standard + $50 fast
 
 
 class TestCLI(unittest.TestCase):
