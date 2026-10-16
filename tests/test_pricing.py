@@ -389,6 +389,36 @@ class TestPriceOverrides(unittest.TestCase):
         with self.assertRaises(PricingError):
             load_price_overrides(path)
 
+    def test_invalid_rates_are_rejected_in_every_price_field(self):
+        for field in ("input", "output", "cache_read", "cached_input"):
+            for value in (-1, "NaN", "Infinity", "-Infinity", True, 10**400):
+                with self.subTest(field=field, value=value):
+                    rates = {"input": 1, "output": 2, field: value}
+                    path = self.write({"m": rates})
+                    with self.assertRaises(PricingError):
+                        load_price_overrides(path)
+
+    def test_direct_api_overrides_also_reject_invalid_rates(self):
+        for field in ("input", "output", "cache_read"):
+            for value in (-1, float("nan"), float("inf"), True):
+                with self.subTest(field=field, value=value):
+                    rates = {"input": 1, "output": 2, field: value}
+                    with self.assertRaises(PricingError):
+                        price_usage(Usage(input_tokens=100), "m", {"m": rates})
+
+    def test_explicit_zero_rates_remain_supported(self):
+        path = self.write({"m": {"input": 0, "output": 0, "cache_read": 0}})
+        self.assertEqual(
+            price_usage(Usage(100, 100, 100), "m", load_price_overrides(path)), 0
+        )
+
+    def test_unreadable_price_path_is_a_pricing_error(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaises(PricingError),
+        ):
+            load_price_overrides(directory)
+
 
 class TestPriceTableIntegrity(unittest.TestCase):
     def test_every_entry_has_both_rates(self):

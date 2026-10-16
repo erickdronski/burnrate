@@ -4,6 +4,7 @@ import io
 import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 from burnrate.cli import main
 from burnrate.receipt import (
@@ -230,6 +231,60 @@ class TestCLI(unittest.TestCase):
         code, _, err = run_cli("--prices", "/nonexistent/p.json")
         self.assertEqual(code, 2)
         self.assertIn("price error", err)
+
+    def test_bad_price_file_does_not_block_the_guard(self):
+        code, out, _ = run_cli(
+            "guard",
+            "--cap",
+            "5",
+            "--prices",
+            "/nonexistent/p.json",
+            "--format",
+            "json",
+            "--transcript",
+            "/nonexistent/transcript.jsonl",
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["state"], "unknown")
+
+    def test_unexpected_cost_failure_does_not_block_the_guard(self):
+        with (
+            patch(
+                "burnrate.guard.session_cost",
+                side_effect=RuntimeError("private detail"),
+            ),
+            TranscriptFixture([assistant("m", output_tokens=1)]) as fixture,
+        ):
+            code, out, err = run_cli(
+                "guard",
+                "--cap",
+                "5",
+                "--transcript",
+                fixture.path,
+                "--format",
+                "json",
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["state"], "unknown")
+        self.assertNotIn("private detail", out + err)
+
+    def test_nonfinite_guard_cap_fails_open_with_valid_json(self):
+        with TranscriptFixture([assistant("m", output_tokens=1)]) as fixture:
+            for cap in ("nan", "inf"):
+                with self.subTest(cap=cap):
+                    code, out, _ = run_cli(
+                        "guard",
+                        "--cap",
+                        cap,
+                        "--transcript",
+                        fixture.path,
+                        "--format",
+                        "json",
+                    )
+                    self.assertEqual(code, 0)
+                    payload = json.loads(out)
+                    self.assertEqual(payload["state"], "unknown")
+                    self.assertIsNone(payload["cap"])
 
     def test_bad_root_exits_two(self):
         code, _, err = run_cli("--root", "/nonexistent/root")

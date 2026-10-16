@@ -35,6 +35,7 @@ costed at zero.
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Dict, Mapping, Optional
 
@@ -250,19 +251,32 @@ def model_rates(
 
     rate = table[key]
     try:
-        input_rate = float(rate["input"])
-        output_rate = float(rate["output"])
+        input_rate = _rate(rate["input"], key, "input")
+        output_rate = _rate(rate["output"], key, "output")
         cache_read = rate.get("cache_read")
         cache_read_rate = (
             input_rate * CACHE_READ_MULTIPLIER
             if cache_read is None
-            else float(cache_read)
+            else _rate(cache_read, key, "cache_read")
         )
-    except (AttributeError, KeyError, TypeError, ValueError):
+    except (AttributeError, KeyError, TypeError):
         raise PricingError(
             "price entry for %r must have numeric 'input' and 'output' rates" % key
         )
     return {"input": input_rate, "output": output_rate, "cache_read": cache_read_rate}
+
+
+def _rate(value: Any, model: str, field: str) -> float:
+    """Reject values that cannot represent a nonnegative price."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        number = float("nan")
+    if isinstance(value, bool) or not math.isfinite(number) or number < 0:
+        raise PricingError(
+            "price entry for %r needs a finite, nonnegative '%s' rate" % (model, field)
+        )
+    return number
 
 
 def price_usage(
@@ -328,6 +342,10 @@ def load_price_overrides(path: str) -> Dict[str, Dict[str, float]]:
         raise PricingError("no such price file: %s" % path)
     except json.JSONDecodeError as exc:
         raise PricingError("%s is not valid JSON: %s" % (path, exc)) from exc
+    except (OSError, UnicodeError) as exc:
+        raise PricingError(
+            "could not read price file %s: %s" % (path, type(exc).__name__)
+        ) from exc
 
     if not isinstance(raw, dict):
         raise PricingError("price file must contain a JSON object")
@@ -344,11 +362,11 @@ def load_price_overrides(path: str) -> Dict[str, Dict[str, float]]:
                 "dollars per million tokens" % model
             )
         cache_read = rate.get("cache_read", rate.get("cached_input"))
-        try:
-            entry = {"input": float(rate["input"]), "output": float(rate["output"])}
-            if cache_read is not None:
-                entry["cache_read"] = float(cache_read)
-        except (TypeError, ValueError):
-            raise PricingError("price entry for %r has non-numeric rates" % model)
+        entry = {
+            "input": _rate(rate["input"], model, "input"),
+            "output": _rate(rate["output"], model, "output"),
+        }
+        if cache_read is not None:
+            entry["cache_read"] = _rate(cache_read, model, "cache_read")
         out[str(model)] = entry
     return out
