@@ -485,7 +485,7 @@ and UUIDs. Treat a report as sensitive before sharing it.
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .   # 204 tests
+python -m unittest discover -s tests -t .   # 211 tests
 ```
 
 Pricing tests check against hand-computed rates rather than snapshots — a
