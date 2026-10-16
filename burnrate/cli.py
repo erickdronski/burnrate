@@ -155,14 +155,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
-    prices = None
-    if args.prices:
-        try:
-            prices = load_price_overrides(args.prices)
-        except PricingError as exc:
-            sys.stderr.write("price error: %s\n" % exc)
-            return 2
-
     if args.command == "guard":
         if args.cap is None:
             sys.stderr.write("guard requires --cap, e.g. --cap 5.00\n")
@@ -178,11 +170,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_guard(
             cap=args.cap,
             transcript_path=args.transcript,
-            prices=prices,
+            prices_path=args.prices,
             warn_at=args.warn_at,
             quiet=args.quiet,
             as_json=args.format == "json",
         )
+
+    prices = None
+    if args.prices:
+        try:
+            prices = load_price_overrides(args.prices)
+        except PricingError as exc:
+            sys.stderr.write("price error: %s\n" % exc)
+            return 2
 
     since = args.since
     if args.today:

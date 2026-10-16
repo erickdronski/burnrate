@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Reject negative, nonfinite, boolean, and overflowing price overrides, including
+  overrides passed directly to the Python API. Explicit zero rates remain valid.
+- Treat unreadable or invalid price files and unexpected spend-evaluation errors
+  as fail-open guard results (exit 0, `unknown` in JSON). Report mode continues to
+  reject invalid price files with exit 2.
+- Reject nonfinite caps before transcript discovery and emit JSON `null` for
+  their cap value instead of nonstandard NaN or Infinity.
+
 ## [0.2.0] — 2026-10-06
 
 Codex support, and a price table that was wrong where it mattered most.

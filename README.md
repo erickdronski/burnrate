@@ -124,7 +124,10 @@ already incurred or cap spending at the provider. Codex sessions get usage
 receipts, but this package does not implement a Codex guard or bundle Codex prices.
 
 **It fails open.** If the transcript is missing, unreadable, or contains no
-priced usage, the guard exits 0 and reports the reason. In mixed-model sessions,
+priced usage, the guard exits 0 and reports the reason. Invalid price files,
+nonfinite or nonpositive caps, and unexpected evaluation errors also fail open;
+JSON output reports `state: "unknown"` (and `cap: null` for a nonfinite cap).
+The report command still exits 2 for an invalid price file. In mixed-model sessions,
 only models with known prices contribute to the threshold. Review price
 coverage before relying on the guard; unknown usage can make the estimate
 incomplete.
@@ -266,6 +269,9 @@ your rates and they are priced like anything else:
 Each `…` is your rate in US dollars per million tokens. Copied as is, the file
 is rejected rather than read as zeros, which would cost billions of tokens at
 nothing.
+
+Rates must be finite, nonnegative numbers; explicit zero rates are supported.
+Negative values, booleans, NaN, and infinity are rejected.
 
 **Plan usage is the number a subscriber can act on.** Codex logs the plan's own
 meter with every response, and burnrate prints the latest reading. It is the

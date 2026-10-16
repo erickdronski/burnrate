@@ -34,9 +34,9 @@ none:
 * **It fails open.** If the transcript cannot be found or parsed, the guard
   exits 0 and says so. A cost tool that bricks someone's agent because it could
   not read a log file deserves to be uninstalled, and would be.
-* **It is cheap.** It reads one file, not the whole history directory, and it
-  does so on every tool call. Parsing is capped so a very long session does not
-  add latency to every step.
+* **It reads the current transcript.** With a supplied path it parses one file
+  on every tool call. Work grows with transcript size; there is no incremental
+  cache or parsing cap. Without a path, discovery may inspect other sessions.
 * **It warns before it blocks.** Crossing a warning threshold prints to stderr
   and exits 0. Only the hard cap stops the run.
 """
@@ -44,11 +44,12 @@ none:
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
-from .pricing import price_usage
+from .pricing import load_price_overrides, price_usage
 from .receipt import fmt_money
 from .sessions import Session, discover, parse_file
 
@@ -65,7 +66,7 @@ class GuardResult:
         self,
         state: str,
         cost: Optional[float],
-        cap: float,
+        cap: Optional[float],
         message: str,
         session_id: Optional[str] = None,
     ) -> None:
@@ -113,9 +114,12 @@ def evaluate(
     warn_at: float = DEFAULT_WARN_AT,
 ) -> GuardResult:
     """Decide whether the current session may continue."""
-    if cap <= 0:
+    if not math.isfinite(cap) or cap <= 0:
         return GuardResult(
-            "unknown", None, cap, "cap must be greater than zero; not enforcing"
+            "unknown",
+            None,
+            cap if math.isfinite(cap) else None,
+            "cap must be finite and greater than zero; not enforcing",
         )
 
     path = transcript_path or _transcript_from_environment()
@@ -243,8 +247,22 @@ def run_guard(
     warn_at: float = DEFAULT_WARN_AT,
     quiet: bool = False,
     as_json: bool = False,
+    prices_path: Optional[str] = None,
 ) -> int:
-    result = evaluate(cap, transcript_path, prices, warn_at)
+    try:
+        if prices_path is not None:
+            prices = load_price_overrides(prices_path)
+        result = evaluate(cap, transcript_path, prices, warn_at)
+    except Exception as exc:
+        # The hook may block only after it has established that the cap was
+        # reached. Configuration and evaluation failures must leave it open.
+        result = GuardResult(
+            "unknown",
+            None,
+            cap if math.isfinite(cap) else None,
+            "burnrate: could not evaluate spend (%s); not enforcing"
+            % type(exc).__name__,
+        )
 
     if as_json:
         sys.stdout.write(json.dumps(result.to_dict()) + "\n")
