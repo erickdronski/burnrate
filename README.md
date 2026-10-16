@@ -1,12 +1,12 @@
 <h1 align="center">burnrate</h1>
 
-<p align="center"><strong>What your coding agent actually cost — and a cap to stop it before it costs more.</strong><br>
+<p align="center"><strong>Understand coding-agent usage, estimate spend, and set a budget guard.</strong><br>
 Local, offline, zero dependencies, no API key.</p>
 
 <p align="center">
   <a href="#try-it">Try it</a> ·
   <a href="#the-spend-cap">Spend cap</a> ·
-  <a href="#the-bug-in-every-naive-token-counter">Why other counters are wrong</a> ·
+  <a href="#token-accounting">Token accounting</a> ·
   <a href="#codex">Codex</a> ·
   <a href="#what-it-reports">Reports</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -18,21 +18,31 @@ Local, offline, zero dependencies, no API key.</p>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-174ea6">
   <img alt="Linux macOS Windows" src="https://img.shields.io/badge/tested_on-Linux%20%7C%20macOS%20%7C%20Windows-0f766e">
   <img alt="ruff" src="https://img.shields.io/badge/lint-ruff-d97706">
-  <img alt="204 tests" src="https://img.shields.io/badge/tests-204-6b21a8">
+  <a href="https://github.com/erickdronski/burnrate/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/erickdronski/burnrate/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
 ---
 
-You start an agent on a task, step away, and come back to a finished feature and
-no idea what it cost. Then at some point you get a bill, and it is one number
-for a month of work you can no longer break down.
+`burnrate` turns local Claude Code transcripts and Codex CLI rollouts into
+session receipts, usage summaries, and cost estimates. It helps developers and
+teams investigate expensive sessions, understand caching, and compare spend
+across projects without sending logs to another service.
 
-`burnrate` reads the session logs your agent already writes to disk — Claude
-Code's transcripts and OpenAI Codex CLI's rollouts — and prints a receipt.
-Nothing is uploaded, no API key is involved, and it works offline — the data is
-already on your machine.
+| Capability | Practical use |
+|---|---|
+| Session receipts | See tokens, tools, and estimated cost for an individual task |
+| Trends and roll-ups | Find high-cost sessions and summarize by day, project, model, or agent |
+| Claude Code budget guard | Warn or block a tool call when recorded, priced usage reaches a threshold |
+| Codex usage reporting | Group subagent threads and show the latest logged plan-usage reading |
+
+**Cost figures are estimates from local logs and a dated price table, not
+invoices.** Unknown models remain unpriced. The guard checks at tool-call
+boundaries and fails open when it cannot calculate a cost; it is not a billing
+limit. Codex reporting has no budget guard.
 
 ## Try it
+
+Requirements: Python 3.9+ and Git for installation from source.
 
 ```bash
 pip install git+https://github.com/erickdronski/burnrate
@@ -87,8 +97,9 @@ watching.
 burnrate guard --cap 5.00
 ```
 
-Wire it into `~/.claude/settings.json` as a hook and it checks on every tool
-call, warns at 75% of the cap, and stops the session at 100%:
+Add it to the hooks in `~/.claude/settings.json`. Before each tool call, it
+checks recorded usage, warns at 75% of the configured threshold, and returns a
+blocking hook result at 100%:
 
 ```json
 {
@@ -107,16 +118,18 @@ Stopping here. Raise the cap with --cap, or start a fresh session — context
 resets are usually cheaper than continuing a long one anyway.
 ```
 
-The cap is a Claude Code hook, and it reads Claude Code transcripts only.
-Codex sessions get receipts but no cap — there is no hook to install it in, and
-no verified price to cap against.
+The guard reads Claude Code transcripts only. It can block a subsequent tool
+call after recorded usage reaches the threshold; it cannot prevent charges
+already incurred or cap spending at the provider. Codex sessions get usage
+receipts, but this package does not implement a Codex guard or bundle Codex prices.
 
-**It fails open, always.** If the transcript is missing, unreadable, or uses a
-model with no price on file, the guard exits 0 and says why. A cost tool that
-bricks your agent because it couldn't parse a log file deserves to be
-uninstalled, and would be. Every one of those paths is a test.
+**It fails open.** If the transcript is missing, unreadable, or contains no
+priced usage, the guard exits 0 and reports the reason. In mixed-model sessions,
+only models with known prices contribute to the threshold. Review price
+coverage before relying on the guard; unknown usage can make the estimate
+incomplete.
 
-## The bug in every naive token counter
+## Token accounting
 
 Streaming writes the same assistant message to the transcript repeatedly. On
 this machine, **6,244 of 8,822 assistant records shared a `message.id` with
@@ -133,8 +146,7 @@ overcount avoided:    2.30×
 
 `burnrate` keeps one usage record per `message.id`, taking the one with the
 highest `output_tokens` (streaming writes a growing count, so the largest is the
-complete one). If a tool tells you your sessions cost 2–3× what your invoice
-says, this is why.
+complete one). This avoids counting multiple streaming records as separate billable responses.
 
 More places the arithmetic is easy to get wrong, and what this does:
 
@@ -346,7 +358,7 @@ knowing about because they are easy to get wrong:
 `--since` and `--today` skip any file last written more than a day before the
 date without opening it.
 
-## What actually cost you money
+## Investigate high-cost sessions
 
 A day-by-day total tells you *that* Tuesday was expensive. These answer the
 questions you can act on.
@@ -391,7 +403,9 @@ that looks complete.
 
 The table is dated, and the date prints on every report, because a cost figure
 that doesn't say when its prices were current is a number with a hidden expiry.
-Current as of **2026-09-25**, in US dollars per million tokens:
+The bundled table is dated **2026-09-25**, in US dollars per million tokens.
+It is not refreshed automatically; verify applicable rates or supply overrides
+for your billing arrangement:
 
 | Model | Input | Output | Cache read |
 |---|---:|---:|---:|
@@ -484,7 +498,7 @@ Part of a set of small, standalone tools for working with coding agents:
 |---|---|
 | [agentsmith](https://github.com/erickdronski/agentsmith) | Derives your AGENTS.md from the repo and detects drift |
 | [contexttest](https://github.com/erickdronski/contexttest) | A/B tests whether an AGENTS.md change actually helps |
-| [tripwire](https://github.com/erickdronski/tripwire) | Audits what your agent is allowed to do |
+| [tripwire](https://github.com/erickdronski/tripwire) | Audits local agent configuration and permissions |
 | [gtm-skills](https://github.com/erickdronski/gtm-skills) | Go-to-market skills for agents, on a tested arithmetic engine |
 
 ## License
